@@ -20,7 +20,6 @@
 --  15. Sample staff account
 --  16. Five sample residents
 --  17. Sample survey and questions
---  18. Mobile app PIN (residents.mobile_pin) for the Android app
 --
 -- IMPORT THIS FILE ONCE IN PHPMYADMIN
 -- =========================================================
@@ -110,14 +109,6 @@ CREATE TABLE IF NOT EXISTS residents (
     password VARCHAR(255) NOT NULL,
 
     is_first_login TINYINT(1) NOT NULL DEFAULT 1,
-
-    -- 6-digit / short PIN used ONLY by the Android mobile app
-    -- (MIT App Inventor cannot verify the bcrypt hash above, so the
-    -- mobile app compares this PIN instead). This value is mirrored
-    -- into Firebase so the phone can log in without a server.
-    -- Never reuse it as the web password. The bcrypt `password` column
-    -- is NEVER exported to Firebase.
-    mobile_pin VARCHAR(20) DEFAULT NULL,
 
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
@@ -480,8 +471,7 @@ INSERT INTO residents (
     address,
     gender,
     password,
-    is_first_login,
-    mobile_pin
+    is_first_login
 )
 
 SELECT
@@ -493,8 +483,7 @@ SELECT
     'Sulucan, Bocaue, Bulacan',
     'Male',
     '$2b$10$mGrOfVoC0/ORly7Z4iHH0OPlksjcOmNqPP9hh4vkrXXPJnQfq4LMm',
-    1,
-    '2026-0001'
+    1
 
 WHERE NOT EXISTS (
 
@@ -520,8 +509,7 @@ INSERT INTO residents (
     address,
     gender,
     password,
-    is_first_login,
-    mobile_pin
+    is_first_login
 )
 
 SELECT
@@ -533,8 +521,7 @@ SELECT
     'Iba-Ibayo, Hagonoy, Bulacan',
     'Female',
     '$2b$10$Vd25nNypemf8GlUJX.pAsehs9fdQUS/7oZvtBEyU7dleDslVSinpe',
-    1,
-    '2026-0002'
+    1
 
 WHERE NOT EXISTS (
 
@@ -560,8 +547,7 @@ INSERT INTO residents (
     address,
     gender,
     password,
-    is_first_login,
-    mobile_pin
+    is_first_login
 )
 
 SELECT
@@ -573,8 +559,7 @@ SELECT
     'Malolos, Bulacan',
     'Female',
     '$2b$10$wz1gKG5NezDiO9kCo3cMveQBx1ju78z7M4plgT349Uuazy9oa.Tr.',
-    1,
-    '2026-0003'
+    1
 
 WHERE NOT EXISTS (
 
@@ -600,8 +585,7 @@ INSERT INTO residents (
     address,
     gender,
     password,
-    is_first_login,
-    mobile_pin
+    is_first_login
 )
 
 SELECT
@@ -613,8 +597,7 @@ SELECT
     'San Isidro 1, Paombong, Bulacan',
     'Female',
     '$2b$10$Va7OVF/mb56F6KFD99w5FegKMXJd3g51ohmsvz12JI2AJdqnhN0hu',
-    1,
-    '2026-0004'
+    1
 
 WHERE NOT EXISTS (
 
@@ -640,8 +623,7 @@ INSERT INTO residents (
     address,
     gender,
     password,
-    is_first_login,
-    mobile_pin
+    is_first_login
 )
 
 SELECT
@@ -653,8 +635,7 @@ SELECT
     'Malis, Guiguinto, Bulacan',
     'Male',
     '$2b$10$qPNa1js1imq7pYTuQF2AluEX3BwQRYr5BXeZfaAiJbzR55z8.vrw2',
-    1,
-    '2026-0005'
+    1
 
 WHERE NOT EXISTS (
 
