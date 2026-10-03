@@ -102,13 +102,14 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     contact_number,
                     address,
                     password,
-                    is_first_login
+                    is_first_login,
+                    mobile_pin
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
             ");
 
             $stmt->bind_param(
-                "ssssssss",
+                "sssssssss",
                 $resident_number,
                 $first_name,
                 $last_name,
@@ -116,12 +117,13 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 $email,
                 $contact_number,
                 $address,
-                $hashed
+                $hashed,
+                $resident_number
             );
 
             if ($stmt->execute()) {
                 $inserted = true;
-                $success = "Resident account created successfully. Default password is their Resident Number (" . $resident_number . ").";
+                $success = "Resident account created successfully. Default web password is their Resident Number (" . $resident_number . "). Mobile app PIN was set to the same Resident Number.";
                 $resident_number = $first_name = $last_name = $gender = $email = $contact_number = $address = "";
             } else {
                 break;

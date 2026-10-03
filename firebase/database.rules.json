@@ -1,0 +1,27 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "residents": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "surveys": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "mobile_responses": {
+      ".read": "auth != null",
+      "$surveyId": {
+        ".write": "auth != null",
+        "$residentNumber": {
+          ".write": "auth != null"
+        }
+      }
+    },
+    "meta": {
+      ".read": "auth != null",
+      ".write": false
+    }
+  }
+}

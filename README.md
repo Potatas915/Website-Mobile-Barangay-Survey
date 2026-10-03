@@ -182,3 +182,130 @@ you — make sure your group still puts together:
 - Exporting straight to Excel and a login history report page are still left
   as easy extensions if your group wants to go for the optional points (the
   `login_history` table is already being written to on every login).
+
+## Android app and Firebase (Activity 8)
+
+The phone app lives one level up, in `../Activity_7.aia`, and reads this
+database through Firebase Realtime Database. MySQL stays the master copy: the
+phone never talks to it, and answers come back the other way through a sync
+script.
+
+```
+api/
+├── export_to_firebase.php    builds firebase/barangay_survey_export.json
+└── sync_responses.php        imports phone answers into MySQL
+firebase/
+├── barangay_survey_export.json   generated; import this into Firebase
+└── database.rules.json           import this into Firebase rules
+```
+
+### 1. Set up the database
+
+`database/barangay_survey.sql` now has a `mobile_pin` column on `residents`,
+so import that file rather than an older copy. Each sample resident's PIN is
+their Resident Number.
+
+### 2. Publish to Firebase
+
+Generate the export and import it into the Realtime Database:
+
+```
+php api/export_to_firebase.php --write
+```
+
+Then in the Firebase console, import `firebase/barangay_survey_export.json` at
+the **root** of the database and set `firebase/database.rules.json` as the
+rules. Doing it at the root replaces everything, which will also delete any
+answers the phone has collected but that have not been imported yet - so sync
+first (step 4) if that has happened.
+
+Alternatively push straight from the CLI once a token is configured:
+
+```
+php api/export_to_firebase.php --push
+```
+
+**The bcrypt `password` column is never exported.** App Inventor cannot verify
+a bcrypt hash, so the app logs in with `mobile_pin` instead, which is exported
+in the clear. Treat that column as a PIN, not a password, and do not reuse a
+real password as someone's PIN.
+
+### 3. Rotate the database token - do this before handing anything in
+
+The token that ships inside `Activity_7.aia` has been committed and shared, so
+it must be replaced:
+
+1. In the Firebase console, create a new database token and revoke the old one.
+2. In App Inventor, open `Activity_7.aia` and change the **FirebaseToken**
+   property on the `FirebaseDB1` component of every screen (there are eight).
+   The Web calls read the token from that component rather than repeating it,
+   so this is the only place it appears.
+
+`firebase/database.rules.json` requires an authenticated caller for everything,
+including reads. The app sends `?auth=` on its raw Web calls, so importing
+those rules without also giving the app a valid token will break login.
+
+### 4. Bring phone answers back into MySQL
+
+Answers are written by the phone to `mobile_responses/{survey_id}/{res_number}`
+and are not in MySQL until they are imported:
+
+```
+php api/sync_responses.php            # dry run: shows what would import
+php api/sync_responses.php --import   # do it
+php api/sync_responses.php --status   # one line per submission
+```
+
+Re-running is safe. A submission already marked `synced`, or an answer the
+resident already gave on the web, is skipped.
+
+### The shape of the exported data
+
+The app cannot read the keys of a JSON object, so everything it walks is keyed
+by a string it builds itself, and anything it displays in a `Spinner` or
+`ListView` arrives as a finished list of text:
+
+| node | why it is shaped that way |
+| --- | --- |
+| `survey_index.labels` | handed straight to the list screen's ListView |
+| `survey_index.items` | keyed by survey id, one lookup per row |
+| `surveys/{id}.question_list` | keyed by question id, one lookup per row |
+| `...question_list.{q}.choice_labels_list` | handed straight to a Spinner |
+| `...question_list.{q}.choices` | keyed by 1-based position, matching `Spinner.Selection` |
+| `...question_list.{q}.choice_count` | so the app tells a choice question from a typed one without measuring a list |
+| `surveys/{id}.questions` | the same questions keyed by id, for the staff pages and the sync script |
+
+A question with no choices is a short-answer question and is shown as a text
+box; the app does not escape what is typed into it, so avoid quotes and
+backslashes in answers.
+
+### What changed in the app
+
+Membership was replaced by surveys:
+
+- `Member_Profile_Screen` now shows Civil Status instead of Membership Type.
+- `Edit_Profile_Page` and `Registration_Signup_Page` no longer collect it;
+  signup's unused `Membership_Type` global went with it.
+- `Resident_Page`'s Membership card is now a Surveys card that opens
+  `Survey_List`. It was previously an empty branch that did nothing when
+  tapped.
+- Login compares `mobile_pin` instead of `password_hash`.
+- `Survey_List` lists the open surveys; `Survey_Form` fills in up to 8
+  questions. A survey with more than 8 questions says so rather than dropping
+  the remainder.
+
+Because App Inventor cannot create components at runtime, both new screens
+carry a fixed number of rows and hide the ones the data does not use. Changing
+those counts means editing `Survey_List.scm`/`Survey_Form.scm` by hand in App
+Inventor.
+
+### Limits worth knowing
+
+- A resident who signs up **on the phone** exists only in Firebase. The next
+  `--push` will delete them, because MySQL is the master copy. Register
+  residents through `staff/register.php`.
+- Answers are sent one field at a time rather than as a single request.
+  Firebase merges them into one node, but an interrupted submission can leave
+  a partial answer set.
+- Nothing in the app has been opened in App Inventor yet, so the block layouts
+  are unverified on screen.

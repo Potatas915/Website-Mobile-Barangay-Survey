@@ -25,13 +25,14 @@ if (isset($_GET["reset_password"])) {
 
         $update = $conn->prepare("
             UPDATE residents
-            SET password = ?, is_first_login = 1
+            SET password = ?, is_first_login = 1, mobile_pin = ?
             WHERE resident_id = ?
         ");
 
         $update->bind_param(
-            "si",
+            "ssi",
             $hashed,
+            $row["resident_number"],
             $resident_id
         );
 
