@@ -2,16 +2,15 @@
 require_once __DIR__ . "/../includes/functions.php";
 require_staff_login();
 
-$survey_id = isset($_GET["survey_id"]) ? (int)$_GET["survey_id"] : 0;
+$survey_id = isset($_GET["survey_id"]) ? (string)(int)$_GET["survey_id"] : "0";
 
-$stmt = $conn->prepare("SELECT survey_id, title, description, start_date, end_date FROM surveys WHERE survey_id = ?");
-$stmt->bind_param("i", $survey_id);
-$stmt->execute();
-$survey = $stmt->get_result()->fetch_assoc();
+$survey = fb_page(function () use ($survey_id) { return fb_get("surveys/" . $survey_id); });
 
-if (!$survey) {
+if (!is_array($survey)) {
     redirect("survey_management.php");
 }
+
+$survey["survey_id"] = $survey_id;
 
 $error = "";
 $original_start_date = $survey["start_date"];
@@ -30,9 +29,14 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     } elseif ($end_date < $start_date) {
         $error = "End date cannot be earlier than the start date.";
     } else {
-        $update = $conn->prepare("UPDATE surveys SET title = ?, description = ?, start_date = ?, end_date = ? WHERE survey_id = ?");
-        $update->bind_param("ssssi", $title, $description, $start_date, $end_date, $survey_id);
-        $update->execute();
+        fb_page(function () use ($survey_id, $title, $description, $start_date, $end_date) {
+            fb_update("surveys", $survey_id, array(
+                "title" => $title,
+                "description" => $description,
+                "start_date" => $start_date,
+                "end_date" => $end_date,
+            ));
+        });
         redirect("survey_management.php");
     }
 
@@ -43,6 +47,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $survey["end_date"] = $end_date;
 }
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>

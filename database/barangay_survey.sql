@@ -444,7 +444,7 @@ SELECT
     'admin',
     'Barangay Health Staff',
     'staff@example.com',
-    '$2b$10$mF8MNjFO6F1s.nbadeDc5.h9teXtBeuSGv2zBWKOH/.3AKQPksCsm',
+    'admin123',
     'admin'
 
 WHERE NOT EXISTS (
@@ -482,7 +482,7 @@ SELECT
     '09752509652',
     'Sulucan, Bocaue, Bulacan',
     'Male',
-    '$2b$10$mGrOfVoC0/ORly7Z4iHH0OPlksjcOmNqPP9hh4vkrXXPJnQfq4LMm',
+    '111111',
     1
 
 WHERE NOT EXISTS (
@@ -520,7 +520,7 @@ SELECT
     '09763008362',
     'Iba-Ibayo, Hagonoy, Bulacan',
     'Female',
-    '$2b$10$Vd25nNypemf8GlUJX.pAsehs9fdQUS/7oZvtBEyU7dleDslVSinpe',
+    '222222',
     1
 
 WHERE NOT EXISTS (
@@ -558,7 +558,7 @@ SELECT
     '09690640080',
     'Malolos, Bulacan',
     'Female',
-    '$2b$10$wz1gKG5NezDiO9kCo3cMveQBx1ju78z7M4plgT349Uuazy9oa.Tr.',
+    '333333',
     1
 
 WHERE NOT EXISTS (
@@ -596,7 +596,7 @@ SELECT
     '09235476895',
     'San Isidro 1, Paombong, Bulacan',
     'Female',
-    '$2b$10$Va7OVF/mb56F6KFD99w5FegKMXJd3g51ohmsvz12JI2AJdqnhN0hu',
+    '444444',
     1
 
 WHERE NOT EXISTS (
@@ -634,7 +634,7 @@ SELECT
     '09690924629',
     'Malis, Guiguinto, Bulacan',
     'Male',
-    '$2b$10$qPNa1js1imq7pYTuQF2AluEX3BwQRYr5BXeZfaAiJbzR55z8.vrw2',
+    '555555',
     1
 
 WHERE NOT EXISTS (

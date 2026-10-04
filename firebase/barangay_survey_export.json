@@ -1,0 +1,301 @@
+{
+    "meta": {
+        "schema_version": 1,
+        "generated_by": "api/build_export.php",
+        "source_of_truth": "database/barangay_survey.sql",
+        "database": "https://web-to-mobile-2c582-default-rtdb.firebaseio.com",
+        "notes": "Import this file at the ROOT of the Realtime Database. Nested children/questions/choices replace the old foreign keys, since Firebase has no joins. 'counters' stands in for MySQL's AUTO_INCREMENT and 'lookup' replaces the UNIQUE columns that logins read by key. Blank strings stand in for SQL NULL."
+    },
+    "staff": {
+        "1": {
+            "username": "admin",
+            "full_name": "Barangay Health Staff",
+            "email": "staff@example.com",
+            "password": "admin123",
+            "role": "admin",
+            "created_at": "2026-05-01 08:00:00"
+        }
+    },
+    "residents": {
+        "1": {
+            "resident_number": "2026-0001",
+            "first_name": "Justin Lian",
+            "last_name": "Enriquez",
+            "middle_name": "",
+            "extension_name": "",
+            "gender": "Male",
+            "civil_status": "",
+            "email": "lianjustin91@gmail.com",
+            "contact_number": "09752509652",
+            "address": "Sulucan, Bocaue, Bulacan",
+            "birthday": "",
+            "age": "",
+            "occupation": "",
+            "employer": "",
+            "employer_address": "",
+            "father_name": "",
+            "mother_name": "",
+            "spouse_name": "",
+            "spouse_occupation": "",
+            "spouse_employer": "",
+            "reference1_name": "",
+            "reference1_signature": "",
+            "reference2_name": "",
+            "reference2_signature": "",
+            "photo": "",
+            "status": "active",
+            "password": "111111",
+            "is_first_login": 1,
+            "mobile_pin": "2026-0001",
+            "created_at": "2026-05-12 09:15:00",
+            "updated_at": "2026-05-12 09:15:00",
+            "children": {}
+        },
+        "2": {
+            "resident_number": "2026-0002",
+            "first_name": "Cielo Marie",
+            "last_name": "Estolloso",
+            "middle_name": "",
+            "extension_name": "",
+            "gender": "Female",
+            "civil_status": "",
+            "email": "cieloestolloso09@gmail.com",
+            "contact_number": "09763008362",
+            "address": "Iba-Ibayo, Hagonoy, Bulacan",
+            "birthday": "",
+            "age": "",
+            "occupation": "",
+            "employer": "",
+            "employer_address": "",
+            "father_name": "",
+            "mother_name": "",
+            "spouse_name": "",
+            "spouse_occupation": "",
+            "spouse_employer": "",
+            "reference1_name": "",
+            "reference1_signature": "",
+            "reference2_name": "",
+            "reference2_signature": "",
+            "photo": "",
+            "status": "active",
+            "password": "222222",
+            "is_first_login": 1,
+            "mobile_pin": "2026-0002",
+            "created_at": "2026-06-03 10:40:00",
+            "updated_at": "2026-06-03 10:40:00",
+            "children": {}
+        },
+        "3": {
+            "resident_number": "2026-0003",
+            "first_name": "Mary Pauleen",
+            "last_name": "Salvador",
+            "middle_name": "",
+            "extension_name": "",
+            "gender": "Female",
+            "civil_status": "",
+            "email": "pauleensalvador@gmail.com",
+            "contact_number": "09690640080",
+            "address": "Malolos, Bulacan",
+            "birthday": "",
+            "age": "",
+            "occupation": "",
+            "employer": "",
+            "employer_address": "",
+            "father_name": "",
+            "mother_name": "",
+            "spouse_name": "",
+            "spouse_occupation": "",
+            "spouse_employer": "",
+            "reference1_name": "",
+            "reference1_signature": "",
+            "reference2_name": "",
+            "reference2_signature": "",
+            "photo": "",
+            "status": "active",
+            "password": "333333",
+            "is_first_login": 1,
+            "mobile_pin": "2026-0003",
+            "created_at": "2026-07-19 14:05:00",
+            "updated_at": "2026-07-19 14:05:00",
+            "children": {}
+        },
+        "4": {
+            "resident_number": "2026-0004",
+            "first_name": "Kylie Denise",
+            "last_name": "Marasigan",
+            "middle_name": "",
+            "extension_name": "",
+            "gender": "Female",
+            "civil_status": "",
+            "email": "kyliedenise12@gmail.com",
+            "contact_number": "09235476895",
+            "address": "San Isidro 1, Paombong, Bulacan",
+            "birthday": "",
+            "age": "",
+            "occupation": "",
+            "employer": "",
+            "employer_address": "",
+            "father_name": "",
+            "mother_name": "",
+            "spouse_name": "",
+            "spouse_occupation": "",
+            "spouse_employer": "",
+            "reference1_name": "",
+            "reference1_signature": "",
+            "reference2_name": "",
+            "reference2_signature": "",
+            "photo": "",
+            "status": "active",
+            "password": "444444",
+            "is_first_login": 1,
+            "mobile_pin": "2026-0004",
+            "created_at": "2026-08-24 11:20:00",
+            "updated_at": "2026-08-24 11:20:00",
+            "children": {}
+        },
+        "5": {
+            "resident_number": "2026-0005",
+            "first_name": "Aaron Gabriel",
+            "last_name": "Ranes",
+            "middle_name": "",
+            "extension_name": "",
+            "gender": "Male",
+            "civil_status": "",
+            "email": "aarongabrielranes@gmail.com",
+            "contact_number": "09690924629",
+            "address": "Malis, Guiguinto, Bulacan",
+            "birthday": "",
+            "age": "",
+            "occupation": "",
+            "employer": "",
+            "employer_address": "",
+            "father_name": "",
+            "mother_name": "",
+            "spouse_name": "",
+            "spouse_occupation": "",
+            "spouse_employer": "",
+            "reference1_name": "",
+            "reference1_signature": "",
+            "reference2_name": "",
+            "reference2_signature": "",
+            "photo": "",
+            "status": "active",
+            "password": "555555",
+            "is_first_login": 1,
+            "mobile_pin": "2026-0005",
+            "created_at": "2026-09-28 16:45:00",
+            "updated_at": "2026-09-28 16:45:00",
+            "children": {}
+        }
+    },
+    "surveys": {
+        "1": {
+            "title": "Barangay Health Services Feedback",
+            "description": "Help us improve our health services by answering this short survey.",
+            "created_by": 1,
+            "start_date": "2026-07-01",
+            "end_date": "2026-12-31",
+            "status": "active",
+            "created_at": "2026-06-15 09:00:00",
+            "questions": {
+                "1": {
+                    "question_text": "How satisfied are you with the health center services?",
+                    "question_type": "rating",
+                    "is_required": 1,
+                    "question_order": 1,
+                    "choices": {
+                        "1": {
+                            "choice_text": "1 - Very Dissatisfied",
+                            "choice_order": 1
+                        },
+                        "2": {
+                            "choice_text": "2 - Dissatisfied",
+                            "choice_order": 2
+                        },
+                        "3": {
+                            "choice_text": "3 - Neutral",
+                            "choice_order": 3
+                        },
+                        "4": {
+                            "choice_text": "4 - Satisfied",
+                            "choice_order": 4
+                        },
+                        "5": {
+                            "choice_text": "5 - Very Satisfied",
+                            "choice_order": 5
+                        }
+                    }
+                },
+                "2": {
+                    "question_text": "Have you availed of a free check-up in the past 6 months?",
+                    "question_type": "yes_no",
+                    "is_required": 1,
+                    "question_order": 2,
+                    "choices": {
+                        "1": {
+                            "choice_text": "Yes",
+                            "choice_order": 1
+                        },
+                        "2": {
+                            "choice_text": "No",
+                            "choice_order": 2
+                        }
+                    }
+                },
+                "3": {
+                    "question_text": "Which service do you use most often?",
+                    "question_type": "multiple_choice",
+                    "is_required": 1,
+                    "question_order": 3,
+                    "choices": {
+                        "1": {
+                            "choice_text": "Consultation",
+                            "choice_order": 1
+                        },
+                        "2": {
+                            "choice_text": "Vaccination",
+                            "choice_order": 2
+                        },
+                        "3": {
+                            "choice_text": "Dental Checkup",
+                            "choice_order": 3
+                        },
+                        "4": {
+                            "choice_text": "Maternal Care",
+                            "choice_order": 4
+                        }
+                    }
+                },
+                "4": {
+                    "question_text": "Any suggestions to improve our services?",
+                    "question_type": "short_answer",
+                    "is_required": 0,
+                    "question_order": 4,
+                    "choices": {}
+                }
+            }
+        }
+    },
+    "responses": {},
+    "resident_update_history": {},
+    "login_history": {},
+    "counters": {
+        "staff": 1,
+        "residents": 5,
+        "surveys": 1,
+        "resident_update_history": 0,
+        "login_history": 0
+    },
+    "lookup": {
+        "resident_number": {
+            "2026-0001": "1",
+            "2026-0002": "2",
+            "2026-0003": "3",
+            "2026-0004": "4",
+            "2026-0005": "5"
+        },
+        "staff_username": {
+            "admin": "1"
+        }
+    }
+}

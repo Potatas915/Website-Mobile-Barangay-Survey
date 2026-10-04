@@ -38,49 +38,31 @@ if (
 |--------------------------------------------------------------------------
 */
 
-$stmt =
-    $conn->prepare("
-        SELECT *
-        FROM residents
-        WHERE resident_id = ?
-        LIMIT 1
-    ");
-
-
-if (!$stmt) {
-
-    redirect(
-        "resident_management.php"
-    );
-
-}
-
-
-$stmt->bind_param(
-    "i",
-    $resident_id
-);
-
-
-$stmt->execute();
-
-
+// One row out of the residents collection, by key.
 $resident =
-    $stmt
-        ->get_result()
-        ->fetch_assoc();
+    fb_page(function () use ($resident_id) {
+        return fb_get("residents/" . $resident_id);
+    });
 
 
-$stmt->close();
-
-
-if (!$resident) {
+if (
+    !is_array(
+        $resident
+    )
+) {
 
     redirect(
         "resident_management.php"
     );
 
 }
+
+
+// The row carries its key as "id", and the old column name is what the
+// templates below still use.
+$resident["id"] = $resident_id;
+
+$resident["resident_id"] = $resident_id;
 
 
 /*
@@ -186,46 +168,19 @@ $spouse = [
 $children = [];
 
 
-$children_stmt =
-    $conn->prepare("
-        SELECT
-            child_id,
-            child_name,
-            age
-        FROM resident_children
-        WHERE resident_id = ?
-        ORDER BY child_id ASC
-    ");
+// Children live in a nested node of the resident, and the keys are already
+// numeric in order, which is what ORDER BY child_id ASC did.
+foreach (
+    fb_rows(
+        "residents/" . $resident_id . "/children"
+    )
+    as $child_id =>
+    $child
+) {
 
+    $child["child_id"] = (string) $child_id;
 
-if ($children_stmt) {
-
-    $children_stmt->bind_param(
-        "i",
-        $resident_id
-    );
-
-
-    $children_stmt->execute();
-
-
-    $children_result =
-        $children_stmt
-            ->get_result();
-
-
-    while (
-        $child =
-        $children_result->fetch_assoc()
-    ) {
-
-        $children[] =
-            $child;
-
-    }
-
-
-    $children_stmt->close();
+    $children[] = $child;
 
 }
 
@@ -309,54 +264,49 @@ $references = array_values(
 $history = [];
 
 
-$history_stmt =
-    $conn->prepare("
-        SELECT
-            history_id,
-            updated_by_type,
-            updated_by_id,
-            update_section,
-            old_data,
-            new_data,
-            updated_at
-        FROM resident_update_history
-        WHERE resident_id = ?
-        ORDER BY
-            updated_at DESC,
-            history_id DESC
-    ");
+foreach (
+    fb_rows(
+        "resident_update_history"
+    )
+    as $history_id =>
+    $history_row
+) {
 
-
-if ($history_stmt) {
-
-    $history_stmt->bind_param(
-        "i",
-        $resident_id
-    );
-
-
-    $history_stmt->execute();
-
-
-    $history_result =
-        $history_stmt
-            ->get_result();
-
-
-    while (
-        $history_row =
-        $history_result->fetch_assoc()
+    if (
+        (string) ($history_row["resident_id"] ?? "")
+        !==
+        (string) $resident_id
     ) {
 
-        $history[] =
-            $history_row;
+        continue;
 
     }
 
+    $history_row["history_id"] = (string) $history_id;
 
-    $history_stmt->close();
+    $history[] = $history_row;
 
 }
+
+
+// ORDER BY updated_at DESC, history_id DESC
+usort(
+    $history,
+    function ($a, $b) {
+
+        $by_time =
+            strcmp(
+                (string) ($b["updated_at"] ?? ""),
+                (string) ($a["updated_at"] ?? "")
+            );
+
+        return
+            $by_time !== 0
+                ? $by_time
+                : (int) ($b["history_id"] ?? 0) <=> (int) ($a["history_id"] ?? 0);
+
+    }
+);
 
 
 /*
@@ -366,6 +316,10 @@ if ($history_stmt) {
 */
 
 $staff_names = [];
+
+
+$staff_rows =
+    fb_rows("staff");
 
 
 foreach (
@@ -402,39 +356,10 @@ foreach (
     }
 
 
-    $staff_stmt =
-        $conn->prepare("
-            SELECT
-                full_name,
-                username
-            FROM staff
-            WHERE staff_id = ?
-            LIMIT 1
-        ");
-
-
-    if (
-        !$staff_stmt
-    ) {
-
-        continue;
-
-    }
-
-
-    $staff_stmt->bind_param(
-        "i",
-        $staff_id
-    );
-
-
-    $staff_stmt->execute();
-
-
+    // The staff collection is read once for the whole page and then matched
+    // in memory.
     $staff_row =
-        $staff_stmt
-            ->get_result()
-            ->fetch_assoc();
+        $staff_rows[(string) $staff_id] ?? null;
 
 
     if (
@@ -462,9 +387,6 @@ foreach (
             "Staff";
 
     }
-
-
-    $staff_stmt->close();
 
 }
 

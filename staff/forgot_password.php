@@ -19,23 +19,26 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && ($_POST["action"] ?? "") === "verif
     $username = trim($_POST["username"]);
     $email = trim($_POST["email"]);
 
-    $stmt = $conn->prepare(
-        "SELECT staff_id FROM staff WHERE username = ? AND email = ?"
-    );
-    $stmt->bind_param("ss", $username, $email);
-    $stmt->execute();
-    $result = $stmt->get_result();
+    fb_page(function () use ($username, $email, &$error, &$staff_id, &$step) {
 
-    if ($result->num_rows === 1) {
-        $row = $result->fetch_assoc();
-        $_SESSION["reset_staff_id"] = $row["staff_id"];
-        $staff_id = $row["staff_id"];
-        $step = "reset";
-    } else {
-        $error = "We couldn't match that username and email.";
-    }
+        $staff = fb_staff_by_username($username);
 
-    $stmt->close();
+        // MySQL compared email with a case-insensitive collation, so keep
+        // matching that way here.
+
+        if ($staff && strcasecmp((string)($staff["email"] ?? ""), $email) === 0) {
+
+            $_SESSION["reset_staff_id"] = $staff["id"];
+            $staff_id = $staff["id"];
+            $step = "reset";
+
+        } else {
+
+            $error = "We couldn't match that username and email.";
+
+        }
+
+    });
 
 } elseif ($_SERVER["REQUEST_METHOD"] === "POST" && ($_POST["action"] ?? "") === "reset") {
 
@@ -54,25 +57,28 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && ($_POST["action"] ?? "") === "verif
         $step = "reset";
     } else {
 
-        $stmt = $conn->prepare("SELECT password FROM staff WHERE staff_id = ?");
-        $stmt->bind_param("i", $staff_id);
-        $stmt->execute();
-        $current = $stmt->get_result()->fetch_assoc();
-        $stmt->close();
+        fb_page(function () use ($new_password, $staff_id, &$error, &$step) {
 
-        if ($current && password_verify($new_password, $current["password"])) {
+        $staff = fb_get("staff/" . $staff_id);
+
+        if (is_array($staff)
+            && hash_equals((string)($staff["password"] ?? ""), (string)$new_password)) {
+
             $error = "That's your current password. Please choose a different one.";
             $step = "reset";
-        } else {
-            $hashed = password_hash($new_password, PASSWORD_DEFAULT);
-            $stmt = $conn->prepare("UPDATE staff SET password = ? WHERE staff_id = ?");
-            $stmt->bind_param("si", $hashed, $staff_id);
-            $stmt->execute();
-            $stmt->close();
 
-            unset($_SESSION["reset_staff_id"]);
-            redirect("login.php?reset=1");
+            return;
+
         }
+
+        fb_update("staff", $staff_id, array(
+            "password" => $new_password,
+        ));
+
+        unset($_SESSION["reset_staff_id"]);
+        redirect("login.php?reset=1");
+
+    });
     }
 }
 ?>

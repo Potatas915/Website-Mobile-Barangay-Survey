@@ -1,7 +1,7 @@
 <?php
 date_default_timezone_set("Asia/Manila");
 session_start();
-require_once __DIR__ . "/../config/database.php";
+require_once __DIR__ . "/firebase.php";
 
 // Redirect helper
 function redirect($url) {
@@ -57,6 +57,69 @@ function pct_change($current, $previous) {
     }
     $pct = (($current - $previous) / $previous) * 100;
     return ["pct" => round(abs($pct), 1), "up" => $pct >= 0];
+}
+
+// ---------------------------------------------------------
+// Rows: Firebase has no schema and fills in no defaults, so a row
+// written by the site carries every column of the old table itself.
+// That keeps a newly registered resident the same shape as the ones
+// in the seed data, so pages never have to guess whether a key exists.
+// ---------------------------------------------------------
+
+// A residents row with the same defaults MySQL used to supply, with the
+// given fields applied on top.
+function blank_resident_row(array $overrides = array()) {
+    $now = date("Y-m-d H:i:s");
+    $row = array(
+        "resident_number"     => "",
+        "first_name"          => "",
+        "last_name"           => "",
+        "middle_name"         => "",
+        "extension_name"      => "",
+        "gender"              => "",
+        "civil_status"        => "",
+        "email"               => "",
+        "contact_number"      => "",
+        "address"             => "",
+        "birthday"            => "",
+        "age"                 => "",
+        "occupation"          => "",
+        "employer"            => "",
+        "employer_address"    => "",
+        "father_name"         => "",
+        "mother_name"         => "",
+        "spouse_name"         => "",
+        "spouse_occupation"   => "",
+        "spouse_employer"     => "",
+        "reference1_name"     => "",
+        "reference1_signature" => "",
+        "reference2_name"     => "",
+        "reference2_signature" => "",
+        "photo"               => "",
+        "status"              => "active",
+        "password"            => "",
+        "is_first_login"      => 1,
+        "mobile_pin"          => "",
+        "created_at"          => $now,
+        "updated_at"          => $now,
+    );
+    return array_merge($row, $overrides);
+}
+
+// Writes a resident row and points lookup/resident_number at it, which is
+// what the login page reads.
+function fb_insert_resident(array $row) {
+    $id = fb_insert("residents", $row);
+    fb_index_set("resident_number", (string)$row["resident_number"], $id);
+    return $id;
+}
+
+// Re-points lookup/resident_number after a Resident Number changes.
+function fb_update_resident_number($old_number, $new_number, $id) {
+    if ((string)$old_number !== (string)$new_number) {
+        fb_index_remove("resident_number", $old_number);
+    }
+    fb_index_set("resident_number", $new_number, $id);
 }
 
 // ---------------------------------------------------------

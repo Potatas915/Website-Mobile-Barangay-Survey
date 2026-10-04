@@ -5,15 +5,50 @@ require_resident_login();
 $resident_id = $_SESSION["resident_id"];
 
 // active surveys within date range, with a flag for whether this resident already answered
-$sql = "SELECT s.survey_id, s.title, s.description, s.end_date,
-        (SELECT COUNT(*) FROM responses r WHERE r.survey_id = s.survey_id AND r.resident_id = ?) AS already_answered
-        FROM surveys s
-        WHERE s.status = 'active' AND CURDATE() BETWEEN s.start_date AND s.end_date
-        ORDER BY s.start_date DESC";
-$stmt = $conn->prepare($sql);
-$stmt->bind_param("i", $resident_id);
-$stmt->execute();
-$surveys = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+fb_page(function () use ($resident_id, &$surveys, &$lifetime_answered,
+                       &$total_ever, &$completion_rate, &$profile_incomplete) {
+
+    // The subquery that used to count this resident's answers per survey is a
+    // lookup in the responses we already fetch for the totals below.
+    $answered_by_survey = array();
+    foreach (fb_rows("responses") as $response) {
+        if ((string)($response["resident_id"] ?? "") === (string)$resident_id) {
+            $lifetime_answered++;
+            $survey_id = (string)($response["survey_id"] ?? "");
+            $answered_by_survey[$survey_id] = ($answered_by_survey[$survey_id] ?? 0) + 1;
+        }
+    }
+
+    $today = date("Y-m-d");
+
+    $surveys = array();
+    foreach (fb_rows("surveys") as $survey) {
+        if (($survey["status"] ?? "") !== "active") {
+            continue;
+        }
+        if ($today < $survey["start_date"] || $today > $survey["end_date"]) {
+            continue;
+        }
+        $survey["survey_id"] = $survey["id"];
+        $survey["already_answered"] = $answered_by_survey[(string)$survey["id"]] ?? 0;
+        $surveys[] = $survey;
+    }
+
+    // MySQL ordered these by start_date DESC.
+    usort($surveys, function ($a, $b) {
+        return strcmp((string)$b["start_date"], (string)$a["start_date"]);
+    });
+
+    $total_ever = count(fb_rows("surveys"));
+    $completion_rate = $total_ever > 0 ? round(($lifetime_answered / $total_ever) * 100, 1) : 0;
+
+    // Nudge the resident to finish their personal information profile
+    // (Act 5 - Set A) if the core fields are still blank.
+    $resident = fb_get("residents/" . $resident_id);
+    $profile_check = is_array($resident) ? $resident : array();
+    $profile_incomplete = empty($profile_check["birthday"]) || empty($profile_check["civil_status"])
+        || empty($profile_check["contact_number"]) || empty($profile_check["address"]) || empty($profile_check["occupation"]);
+});
 
 /* ---------------------------------------------------------
    Quick snapshot stats for this resident
@@ -21,24 +56,6 @@ $surveys = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $available_count = count($surveys);
 $answered_now = count(array_filter($surveys, fn($s) => $s["already_answered"] > 0));
 $pending_count = $available_count - $answered_now;
-
-$lt_stmt = $conn->prepare("SELECT COUNT(*) AS c FROM responses WHERE resident_id = ?");
-$lt_stmt->bind_param("i", $resident_id);
-$lt_stmt->execute();
-$lifetime_answered = (int)$lt_stmt->get_result()->fetch_assoc()["c"];
-
-$total_ever_stmt = $conn->query("SELECT COUNT(*) AS c FROM surveys");
-$total_ever = (int)$total_ever_stmt->fetch_assoc()["c"];
-$completion_rate = $total_ever > 0 ? round(($lifetime_answered / $total_ever) * 100, 1) : 0;
-
-// Nudge the resident to finish their personal information profile
-// (Act 5 - Set A) if the core fields are still blank.
-$profile_stmt = $conn->prepare("SELECT birthday, civil_status, contact_number, address, occupation FROM residents WHERE resident_id = ?");
-$profile_stmt->bind_param("i", $resident_id);
-$profile_stmt->execute();
-$profile_check = $profile_stmt->get_result()->fetch_assoc();
-$profile_incomplete = empty($profile_check["birthday"]) || empty($profile_check["civil_status"])
-    || empty($profile_check["contact_number"]) || empty($profile_check["address"]) || empty($profile_check["occupation"]);
 ?>
 <!DOCTYPE html>
 <html lang="en">

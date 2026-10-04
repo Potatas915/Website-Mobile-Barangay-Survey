@@ -14,11 +14,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     } elseif ($new_password !== $confirm_password) {
         $error = "Passwords do not match.";
     } else {
-        $hashed = password_hash($new_password, PASSWORD_DEFAULT);
-        $stmt = $conn->prepare("UPDATE residents SET password = ?, is_first_login = 0 WHERE resident_id = ?");
-        $stmt->bind_param("si", $hashed, $_SESSION["resident_id"]);
-        $stmt->execute();
-        $stmt->close();
+        fb_page(function () use ($new_password) {
+            fb_update("residents", $_SESSION["resident_id"], array(
+                "password"       => $new_password,
+                "is_first_login" => 0,
+            ));
+        });
         redirect("dashboard.php");
     }
 }

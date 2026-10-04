@@ -7,38 +7,37 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $username = trim($_POST["username"]);
     $password = $_POST["password"];
 
-    $stmt = $conn->prepare("SELECT staff_id, full_name, role, password FROM staff WHERE username = ?");
-    $stmt->bind_param("s", $username);
-    $stmt->execute();
-    $result = $stmt->get_result();
+    fb_page(function () use ($username, $password, &$error) {
 
-    if ($result->num_rows === 1) {
-        $staff = $result->fetch_assoc();
+    $staff = fb_staff_by_username($username);
 
-        if (password_verify($password, $staff["password"])) {
+    // An unknown username and a wrong password get the same message, so the
+    // form never reveals which usernames exist.
 
-            $_SESSION["staff_id"] = $staff["staff_id"];
-            $_SESSION["staff_name"] = $staff["full_name"];
-            $_SESSION["staff_role"] = $staff["role"];
+    // Passwords are stored in plain text, so this is a straight comparison.
+    // hash_equals keeps it constant-time so a wrong password cannot be guessed
+    // one character at a time by timing the response.
+    if (!$staff || !hash_equals((string)($staff["password"] ?? ""), (string)$password)) {
 
-            $log = $conn->prepare(
-                "INSERT INTO login_history (user_type, user_id) VALUES ('staff', ?)"
-            );
-
-            $log->bind_param("i", $staff["staff_id"]);
-            $log->execute();
-
-            redirect("dashboard.php");
-
-        } else {
-            $error = "Incorrect username or password.";
-        }
-
-    } else {
         $error = "Incorrect username or password.";
+
+        return;
+
     }
 
-    $stmt->close();
+    $_SESSION["staff_id"] = $staff["id"];
+    $_SESSION["staff_name"] = $staff["full_name"];
+    $_SESSION["staff_role"] = $staff["role"];
+
+    fb_insert("login_history", array(
+        "user_type" => "staff",
+        "user_id"   => $staff["id"],
+        "login_time" => date("Y-m-d H:i:s"),
+    ));
+
+    redirect("dashboard.php");
+
+});
 }
 ?>
 

@@ -47,43 +47,22 @@ if ($resident_id <= 0) {
 */
 
 function get_edit_resident(
-    $conn,
     $resident_id
 ) {
 
-    $stmt =
-        $conn->prepare("
-            SELECT *
-            FROM residents
-            WHERE resident_id = ?
-            LIMIT 1
-        ");
+    // One row out of the residents collection, by key.
+    $resident =
+        fb_get("residents/" . $resident_id);
 
 
-    if (!$stmt) {
+    if (!is_array($resident)) {
 
         return null;
 
     }
 
 
-    $stmt->bind_param(
-        "i",
-        $resident_id
-    );
-
-
-    $stmt->execute();
-
-
-    $resident =
-        $stmt
-            ->get_result()
-            ->fetch_assoc();
-
-
-    $stmt->close();
-
+    $resident["resident_id"] = $resident_id;
 
     return $resident;
 
@@ -100,7 +79,6 @@ function get_edit_resident(
 */
 
 function get_edit_spouse(
-    $conn,
     $resident_id
 ) {
 
@@ -118,41 +96,11 @@ function get_edit_spouse(
     ];
 
 
-    $stmt =
-        $conn->prepare("
-            SELECT
-                spouse_name,
-                spouse_occupation,
-                spouse_employer
-            FROM residents
-            WHERE resident_id = ?
-            LIMIT 1
-        ");
-
-
-    if (!$stmt) {
-
-        return $spouse;
-
-    }
-
-
-    $stmt->bind_param(
-        "i",
-        $resident_id
-    );
-
-
-    $stmt->execute();
-
-
     $result =
-        $stmt
-            ->get_result()
-            ->fetch_assoc();
+        fb_get("residents/" . $resident_id);
 
 
-    if ($result) {
+    if (is_array($result)) {
 
         $spouse = [
 
@@ -170,9 +118,6 @@ function get_edit_spouse(
     }
 
 
-    $stmt->close();
-
-
     return $spouse;
 
 }
@@ -188,7 +133,6 @@ function get_edit_spouse(
 */
 
 function get_edit_parents(
-    $conn,
     $resident_id
 ) {
 
@@ -203,40 +147,11 @@ function get_edit_parents(
     ];
 
 
-    $stmt =
-        $conn->prepare("
-            SELECT
-                father_name,
-                mother_name
-            FROM residents
-            WHERE resident_id = ?
-            LIMIT 1
-        ");
-
-
-    if (!$stmt) {
-
-        return $parents;
-
-    }
-
-
-    $stmt->bind_param(
-        "i",
-        $resident_id
-    );
-
-
-    $stmt->execute();
-
-
     $result =
-        $stmt
-            ->get_result()
-            ->fetch_assoc();
+        fb_get("residents/" . $resident_id);
 
 
-    if ($result) {
+    if (is_array($result)) {
 
         $parents = [
 
@@ -251,9 +166,6 @@ function get_edit_parents(
     }
 
 
-    $stmt->close();
-
-
     return $parents;
 
 }
@@ -266,68 +178,36 @@ function get_edit_parents(
 */
 
 function get_edit_children(
-    $conn,
     $resident_id
 ) {
 
     $children = [];
 
 
-    $stmt =
-        $conn->prepare("
-            SELECT
-                child_id,
-                child_name,
-                age
-            FROM resident_children
-            WHERE resident_id = ?
-            ORDER BY child_id ASC
-        ");
-
-
-    if (!$stmt) {
-
-        return $children;
-
-    }
-
-
-    $stmt->bind_param(
-        "i",
-        $resident_id
-    );
-
-
-    $stmt->execute();
-
-
-    $result =
-        $stmt
-            ->get_result();
-
-
-    while (
-        $row =
-        $result->fetch_assoc()
+    // Children live in a nested node of the resident, and the numeric keys
+    // already come back in child_id order.
+    foreach (
+        fb_rows(
+            "residents/" . $resident_id . "/children"
+        )
+        as $child_id =>
+        $row
     ) {
 
         $children[] = [
 
             "child_id" =>
-                (int) $row["child_id"],
+                (int) $child_id,
 
             "child_name" =>
-                $row["child_name"],
+                $row["child_name"] ?? "",
 
             "age" =>
-                $row["age"]
+                $row["age"] ?? ""
 
         ];
 
     }
-
-
-    $stmt->close();
 
 
     return $children;
@@ -345,49 +225,17 @@ function get_edit_children(
 */
 
 function get_edit_references(
-    $conn,
     $resident_id
 ) {
 
     $references = [];
 
 
-    $stmt =
-        $conn->prepare("
-            SELECT
-                reference1_name,
-                reference1_signature,
-                reference2_name,
-                reference2_signature
-            FROM residents
-            WHERE resident_id = ?
-            LIMIT 1
-        ");
-
-
-    if (!$stmt) {
-
-        return $references;
-
-    }
-
-
-    $stmt->bind_param(
-        "i",
-        $resident_id
-    );
-
-
-    $stmt->execute();
-
-
     $result =
-        $stmt
-            ->get_result()
-            ->fetch_assoc();
+        fb_get("residents/" . $resident_id);
 
 
-    if ($result) {
+    if (is_array($result)) {
 
         if (
             !empty(
@@ -441,9 +289,6 @@ function get_edit_references(
     }
 
 
-    $stmt->close();
-
-
     return $references;
 
 }
@@ -459,13 +304,11 @@ function get_edit_references(
 */
 
 function build_edit_snapshot(
-    $conn,
     $resident_id
 ) {
 
     $resident =
         get_edit_resident(
-            $conn,
             $resident_id
         );
 
@@ -479,7 +322,6 @@ function build_edit_snapshot(
 
     $children =
         get_edit_children(
-            $conn,
             $resident_id
         );
 
@@ -507,7 +349,6 @@ function build_edit_snapshot(
 
     $references =
         get_edit_references(
-            $conn,
             $resident_id
         );
 
@@ -656,7 +497,6 @@ function build_edit_snapshot(
 */
 
 function save_edit_history(
-    $conn,
     $resident_id,
     $old_snapshot,
     $new_snapshot
@@ -720,62 +560,15 @@ function save_edit_history(
         );
 
 
-    $stmt =
-        $conn->prepare("
-            INSERT INTO resident_update_history
-            (
-                resident_id,
-                updated_by_type,
-                updated_by_id,
-                update_section,
-                old_data,
-                new_data
-            )
-            VALUES
-            (
-                ?,
-                'staff',
-                ?,
-                'complete_profile',
-                ?,
-                ?
-            )
-        ");
-
-
-    if (!$stmt) {
-
-        throw new Exception(
-            "Unable to prepare update history."
-        );
-
-    }
-
-
-    $stmt->bind_param(
-        "iiss",
-        $resident_id,
-        $staff_id,
-        $old_data,
-        $new_data
-    );
-
-
-    if (
-        !$stmt->execute()
-    ) {
-
-        $stmt->close();
-
-
-        throw new Exception(
-            "Unable to save update history."
-        );
-
-    }
-
-
-    $stmt->close();
+    fb_insert("resident_update_history", array(
+        "resident_id"     => (string) $resident_id,
+        "updated_by_type" => "staff",
+        "updated_by_id"   => (int) $staff_id,
+        "update_section"  => "complete_profile",
+        "old_data"        => $old_data,
+        "new_data"        => $new_data,
+        "updated_at"      => date("Y-m-d H:i:s"),
+    ));
 
 
     return true;
@@ -791,7 +584,6 @@ function save_edit_history(
 
 $resident =
     get_edit_resident(
-        $conn,
         $resident_id
     );
 
@@ -1170,47 +962,24 @@ if (
         $error === ""
     ) {
 
-        $dup =
-            $conn->prepare("
-                SELECT resident_id
-                FROM residents
-                WHERE resident_number = ?
-                AND resident_id != ?
-                LIMIT 1
-            ");
-
-
-        if (!$dup) {
-
-            $error =
-                "Unable to validate resident number.";
-
-        }
-        else {
-
-            $dup->bind_param(
-                "si",
-                $resident_number,
-                $resident_id
+        // The lookup/ index finds any resident holding this number; the id
+        // check leaves the resident's own number alone.
+        $duplicate =
+            fb_resident_by_number(
+                $resident_number
             );
 
 
-            $dup->execute();
+        if (
+            $duplicate !== null
+            &&
+            (string) ($duplicate["id"] ?? "")
+            !==
+            (string) $resident_id
+        ) {
 
-
-            if (
-                $dup
-                    ->get_result()
-                    ->num_rows > 0
-            ) {
-
-                $error =
-                    "Resident number is already used by another resident.";
-
-            }
-
-
-            $dup->close();
+            $error =
+                "Resident number is already used by another resident.";
 
         }
 
@@ -1229,9 +998,6 @@ if (
 
         try {
 
-            $conn->begin_transaction();
-
-
             /*
             |--------------------------------------------------------------------------
             | BEFORE SNAPSHOT
@@ -1240,7 +1006,6 @@ if (
 
             $old_snapshot =
                 build_edit_snapshot(
-                    $conn,
                     $resident_id
                 );
 
@@ -1287,226 +1052,63 @@ if (
 
             /*
             |--------------------------------------------------------------------------
-            | SQL NULL values
-            |--------------------------------------------------------------------------
-            */
-
-            $birthday_sql =
-                $birthday !== ""
-                    ? $birthday
-                    : null;
-
-
-            $middle_name_sql =
-                $middle_name !== ""
-                    ? $middle_name
-                    : null;
-
-
-            $extension_name_sql =
-                $extension_name !== ""
-                    ? $extension_name
-                    : null;
-
-
-            $gender_sql =
-                $gender !== ""
-                    ? $gender
-                    : null;
-
-
-            $civil_status_sql =
-                $civil_status !== ""
-                    ? $civil_status
-                    : null;
-
-
-            $email_sql =
-                $email !== ""
-                    ? $email
-                    : null;
-
-
-            $contact_number_sql =
-                $contact_number !== ""
-                    ? $contact_number
-                    : null;
-
-
-            $address_sql =
-                $address !== ""
-                    ? $address
-                    : null;
-
-
-            $occupation_sql =
-                $occupation !== ""
-                    ? $occupation
-                    : null;
-
-
-            $employer_sql =
-                $employer !== ""
-                    ? $employer
-                    : null;
-
-
-            $employer_address_sql =
-                $employer_address !== ""
-                    ? $employer_address
-                    : null;
-
-
-            $father_name_sql =
-                $father_name !== ""
-                    ? $father_name
-                    : null;
-
-
-            $mother_name_sql =
-                $mother_name !== ""
-                    ? $mother_name
-                    : null;
-
-
-            $spouse_name_sql =
-                $spouse_name !== ""
-                    ? $spouse_name
-                    : null;
-
-
-            $spouse_occupation_sql =
-                $spouse_occupation !== ""
-                    ? $spouse_occupation
-                    : null;
-
-
-            $spouse_employer_sql =
-                $spouse_employer !== ""
-                    ? $spouse_employer
-                    : null;
-
-
-            $reference1_name_sql =
-                $reference1_name !== ""
-                    ? $reference1_name
-                    : null;
-
-
-            $reference1_signature_sql =
-                $reference1_signature !== ""
-                    ? $reference1_signature
-                    : null;
-
-
-            $reference2_name_sql =
-                $reference2_name !== ""
-                    ? $reference2_name
-                    : null;
-
-
-            $reference2_signature_sql =
-                $reference2_signature !== ""
-                    ? $reference2_signature
-                    : null;
-
-
-            /*
-            |--------------------------------------------------------------------------
             | UPDATE RESIDENT
             |--------------------------------------------------------------------------
             |
             | Parents, spouse, and references are all stored directly in
-            | residents according to the current Set A database.
+            | residents according to the current Set A database. Empty fields
+            | are written as "" instead of SQL NULL.
             |--------------------------------------------------------------------------
             */
 
-            $stmt =
-                $conn->prepare("
-                    UPDATE residents
-                    SET
-                        resident_number = ?,
-                        first_name = ?,
-                        middle_name = ?,
-                        last_name = ?,
-                        extension_name = ?,
-                        gender = ?,
-                        civil_status = ?,
-                        email = ?,
-                        contact_number = ?,
-                        address = ?,
-                        birthday = ?,
-                        age = ?,
-                        occupation = ?,
-                        employer = ?,
-                        employer_address = ?,
-                        father_name = ?,
-                        mother_name = ?,
-                        spouse_name = ?,
-                        spouse_occupation = ?,
-                        spouse_employer = ?,
-                        reference1_name = ?,
-                        reference1_signature = ?,
-                        reference2_name = ?,
-                        reference2_signature = ?
-                    WHERE resident_id = ?
-                ");
-
-
-            if (!$stmt) {
-
-                throw new Exception(
-                    "Unable to prepare resident update."
-                );
-
-            }
-
-
-            $stmt->bind_param(
-                "sssssssssssissssssssssssi",
-                $resident_number,
-                $first_name,
-                $middle_name_sql,
-                $last_name,
-                $extension_name_sql,
-                $gender_sql,
-                $civil_status_sql,
-                $email_sql,
-                $contact_number_sql,
-                $address_sql,
-                $birthday_sql,
-                $age,
-                $occupation_sql,
-                $employer_sql,
-                $employer_address_sql,
-                $father_name_sql,
-                $mother_name_sql,
-                $spouse_name_sql,
-                $spouse_occupation_sql,
-                $spouse_employer_sql,
-                $reference1_name_sql,
-                $reference1_signature_sql,
-                $reference2_name_sql,
-                $reference2_signature_sql,
-                $resident_id
+            fb_update(
+                "residents",
+                $resident_id,
+                array(
+                    "resident_number"       => $resident_number,
+                    "first_name"            => $first_name,
+                    "middle_name"           => $middle_name,
+                    "last_name"             => $last_name,
+                    "extension_name"        => $extension_name,
+                    "gender"                => $gender,
+                    "civil_status"          => $civil_status,
+                    "email"                 => $email,
+                    "contact_number"        => $contact_number,
+                    "address"               => $address,
+                    "birthday"              => $birthday,
+                    "age"                   => $age === null ? "" : $age,
+                    "occupation"            => $occupation,
+                    "employer"              => $employer,
+                    "employer_address"      => $employer_address,
+                    "father_name"           => $father_name,
+                    "mother_name"           => $mother_name,
+                    "spouse_name"           => $spouse_name,
+                    "spouse_occupation"     => $spouse_occupation,
+                    "spouse_employer"       => $spouse_employer,
+                    "reference1_name"       => $reference1_name,
+                    "reference1_signature"  => $reference1_signature,
+                    "reference2_name"       => $reference2_name,
+                    "reference2_signature"  => $reference2_signature,
+                    "updated_at"            => date("Y-m-d H:i:s"),
+                )
             );
 
 
+            // lookup/ still points at the old number when staff renumbers a
+            // resident, so move the pointer before anything reads it again.
             if (
-                !$stmt->execute()
+                (string) $resident_number
+                !==
+                (string) ($resident["resident_number"] ?? "")
             ) {
 
-                $stmt->close();
-
-
-                throw new Exception(
-                    "Unable to update resident information."
+                fb_update_resident_number(
+                    $resident["resident_number"] ?? "",
+                    $resident_number,
+                    $resident_id
                 );
 
             }
-
-
-            $stmt->close();
 
 
             /*
@@ -1517,7 +1119,6 @@ if (
 
             $new_snapshot =
                 build_edit_snapshot(
-                    $conn,
                     $resident_id
                 );
 
@@ -1538,7 +1139,6 @@ if (
             */
 
             save_edit_history(
-                $conn,
                 $resident_id,
                 $old_snapshot,
                 $new_snapshot
@@ -1551,7 +1151,6 @@ if (
             |--------------------------------------------------------------------------
             */
 
-            $conn->commit();
 
 
             $success =
@@ -1566,7 +1165,6 @@ if (
 
             $resident =
                 get_edit_resident(
-                    $conn,
                     $resident_id
                 );
 
@@ -1575,15 +1173,6 @@ if (
             Throwable $exception
         ) {
 
-            try {
-
-                $conn->rollback();
-
-            }
-            catch (
-                Throwable $rollback_exception
-            ) {
-            }
 
 
             $error =
@@ -1667,7 +1256,6 @@ if (
 
         try {
 
-            $conn->begin_transaction();
 
 
             /*
@@ -1676,16 +1264,13 @@ if (
             |--------------------------------------------------------------------------
             */
 
-            $old =
-                $conn->prepare("
-                    SELECT photo
-                    FROM residents
-                    WHERE resident_id = ?
-                    LIMIT 1
-                ");
+            $old_row =
+                fb_get(
+                    "residents/" . $resident_id
+                );
 
 
-            if (!$old) {
+            if (!is_array($old_row)) {
 
                 throw new Exception(
                     "Unable to load current photo."
@@ -1694,27 +1279,9 @@ if (
             }
 
 
-            $old->bind_param(
-                "i",
-                $resident_id
-            );
-
-
-            $old->execute();
-
-
-            $old_row =
-                $old
-                    ->get_result()
-                    ->fetch_assoc();
-
-
             $old_photo =
                 $old_row["photo"]
                 ?? null;
-
-
-            $old->close();
 
 
             /*
@@ -1723,45 +1290,16 @@ if (
             |--------------------------------------------------------------------------
             */
 
-            $stmt =
-                $conn->prepare("
-                    UPDATE residents
-                    SET photo = ?
-                    WHERE resident_id = ?
-                ");
-
-
-            if (!$stmt) {
-
-                throw new Exception(
-                    "Unable to prepare photo update."
-                );
-
-            }
-
-
-            $stmt->bind_param(
-                "si",
-                $new_photo,
-                $resident_id
+            fb_update(
+                "residents",
+                $resident_id,
+                array(
+                    "photo" => $new_photo
+                )
             );
 
 
-            if (
-                !$stmt->execute()
-            ) {
-
-                $stmt->close();
-
-
-                throw new Exception(
-                    "Unable to save photo."
-                );
-
-            }
-
-
-            $stmt->close();
+            fb_forget();
 
 
             /*
@@ -1803,65 +1341,18 @@ if (
                 );
 
 
-            $photo_history =
-                $conn->prepare("
-                    INSERT INTO resident_update_history
-                    (
-                        resident_id,
-                        updated_by_type,
-                        updated_by_id,
-                        update_section,
-                        old_data,
-                        new_data
-                    )
-                    VALUES
-                    (
-                        ?,
-                        'staff',
-                        ?,
-                        'photo',
-                        ?,
-                        ?
-                    )
-                ");
-
-
-            if (!$photo_history) {
-
-                throw new Exception(
-                    "Unable to prepare photo history."
-                );
-
-            }
-
-
-            $photo_history->bind_param(
-                "iiss",
-                $resident_id,
-                $staff_id,
-                $photo_old_data,
-                $photo_new_data
+            fb_insert(
+                "resident_update_history",
+                array(
+                    "resident_id"     => (string) $resident_id,
+                    "updated_by_type" => "staff",
+                    "updated_by_id"   => (int) $staff_id,
+                    "update_section"  => "photo",
+                    "old_data"        => $photo_old_data,
+                    "new_data"        => $photo_new_data,
+                    "updated_at"      => date("Y-m-d H:i:s"),
+                )
             );
-
-
-            if (
-                !$photo_history->execute()
-            ) {
-
-                $photo_history->close();
-
-
-                throw new Exception(
-                    "Unable to save photo history."
-                );
-
-            }
-
-
-            $photo_history->close();
-
-
-            $conn->commit();
 
 
             /*
@@ -1887,7 +1378,6 @@ if (
 
             $resident =
                 get_edit_resident(
-                    $conn,
                     $resident_id
                 );
 
@@ -1896,15 +1386,6 @@ if (
             Throwable $exception
         ) {
 
-            try {
-
-                $conn->rollback();
-
-            }
-            catch (
-                Throwable $rollback_exception
-            ) {
-            }
 
 
             /*
@@ -2011,7 +1492,6 @@ if (
 
         try {
 
-            $conn->begin_transaction();
 
 
             /*
@@ -2022,7 +1502,6 @@ if (
 
             $old_snapshot =
                 build_edit_snapshot(
-                    $conn,
                     $resident_id
                 );
 
@@ -2033,61 +1512,30 @@ if (
             |--------------------------------------------------------------------------
             */
 
-            $child_age_sql =
-                $child_age !== ""
-                    ? (int)$child_age
-                    : null;
-
-
-            $stmt =
-                $conn->prepare("
-                    INSERT INTO resident_children
-                    (
-                        resident_id,
-                        child_name,
-                        age
-                    )
-                    VALUES
-                    (
-                        ?,
-                        ?,
-                        ?
-                    )
-                ");
-
-
-            if (!$stmt) {
-
-                throw new Exception(
-                    "Unable to prepare child record."
+            // Children are a nested node of the resident, so this is one write
+            // inside the resident's own record.
+            $child_id =
+                fb_next_id(
+                    "resident_children"
                 );
 
-            }
 
-
-            $stmt->bind_param(
-                "isi",
-                $resident_id,
-                $child_name,
-                $child_age_sql
+            fb_raw(
+                "PUT",
+                "residents/" . $resident_id . "/children/" . $child_id,
+                array(
+                    "child_id"    => (string) $child_id,
+                    "resident_id" => (string) $resident_id,
+                    "child_name"  => $child_name,
+                    "age"         => $child_age === ""
+                        ? ""
+                        : (int) $child_age,
+                )
             );
 
 
-            if (
-                !$stmt->execute()
-            ) {
-
-                $stmt->close();
-
-
-                throw new Exception(
-                    "Unable to add child."
-                );
-
-            }
-
-
-            $stmt->close();
+            // Drop the read cache so the snapshot below sees the new child.
+            fb_forget();
 
 
             /*
@@ -2098,20 +1546,17 @@ if (
 
             $new_snapshot =
                 build_edit_snapshot(
-                    $conn,
                     $resident_id
                 );
 
 
             save_edit_history(
-                $conn,
                 $resident_id,
                 $old_snapshot,
                 $new_snapshot
             );
 
 
-            $conn->commit();
 
 
             $success =
@@ -2122,15 +1567,6 @@ if (
             Throwable $exception
         ) {
 
-            try {
-
-                $conn->rollback();
-
-            }
-            catch (
-                Throwable $rollback_exception
-            ) {
-            }
 
 
             $child_error =
@@ -2166,7 +1602,6 @@ if (
 
         try {
 
-            $conn->begin_transaction();
 
 
             /*
@@ -2177,7 +1612,6 @@ if (
 
             $old_snapshot =
                 build_edit_snapshot(
-                    $conn,
                     $resident_id
                 );
 
@@ -2188,50 +1622,28 @@ if (
             |--------------------------------------------------------------------------
             */
 
-            $stmt =
-                $conn->prepare("
-                    DELETE FROM resident_children
-                    WHERE child_id = ?
-                    AND resident_id = ?
-                ");
-
-
-            if (!$stmt) {
-
-                throw new Exception(
-                    "Unable to prepare child deletion."
-                );
-
-            }
-
-
-            $stmt->bind_param(
-                "ii",
-                $child_id,
-                $resident_id
-            );
+            // Children live under the resident, so the resident_id check is
+            // simply part of the path being deleted.
+            $child_path =
+                "residents/" . $resident_id . "/children/" . $child_id;
 
 
             if (
-                !$stmt->execute()
+                !is_array(
+                    fb_get($child_path)
+                )
             ) {
 
-                $stmt->close();
-
-
                 throw new Exception(
-                    "Unable to remove child."
+                    "Child record was not found."
                 );
 
             }
 
 
-            $deleted =
-                $stmt->affected_rows;
+            fb_remove($child_path);
 
-
-            $stmt->close();
-
+            fb_forget();
 
             if (
                 $deleted === 0
@@ -2252,20 +1664,17 @@ if (
 
             $new_snapshot =
                 build_edit_snapshot(
-                    $conn,
                     $resident_id
                 );
 
 
             save_edit_history(
-                $conn,
                 $resident_id,
                 $old_snapshot,
                 $new_snapshot
             );
 
 
-            $conn->commit();
 
 
             redirect(
@@ -2278,15 +1687,6 @@ if (
             Throwable $exception
         ) {
 
-            try {
-
-                $conn->rollback();
-
-            }
-            catch (
-                Throwable $rollback_exception
-            ) {
-            }
 
 
             $child_error =
@@ -2307,7 +1707,6 @@ if (
 
 $resident =
     get_edit_resident(
-        $conn,
         $resident_id
     );
 
@@ -2323,28 +1722,24 @@ if (!$resident) {
 
 $spouse =
     get_edit_spouse(
-        $conn,
         $resident_id
     );
 
 
 $parents =
     get_edit_parents(
-        $conn,
         $resident_id
     );
 
 
 $children =
     get_edit_children(
-        $conn,
         $resident_id
     );
 
 
 $references =
     get_edit_references(
-        $conn,
         $resident_id
     );
 

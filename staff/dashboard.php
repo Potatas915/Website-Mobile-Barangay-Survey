@@ -3,139 +3,253 @@ require_once __DIR__ . "/../includes/functions.php";
 require_staff_login();
 
 /* ---------------------------------------------------------
-   Current snapshot counts
+   Firebase has no query language, so every COUNT(*) below is
+   computed in PHP over the rows we already load for the page.
+   Each collection is fetched exactly once.
 --------------------------------------------------------- */
-$total_residents = (int)$conn->query("SELECT COUNT(*) AS c FROM residents")->fetch_assoc()["c"];
-$active_surveys = (int)$conn->query("SELECT COUNT(*) AS c FROM surveys WHERE status = 'active' AND CURDATE() BETWEEN start_date AND end_date")->fetch_assoc()["c"];
-$total_responses = (int)$conn->query("SELECT COUNT(*) AS c FROM responses")->fetch_assoc()["c"];
-$draft_surveys = (int)$conn->query("SELECT COUNT(*) AS c FROM surveys WHERE status = 'inactive'")->fetch_assoc()["c"];
-$completed_surveys = (int)$conn->query("SELECT COUNT(*) AS c FROM surveys WHERE end_date < CURDATE()")->fetch_assoc()["c"];
-$engaged_residents = (int)$conn->query("SELECT COUNT(DISTINCT resident_id) AS c FROM responses")->fetch_assoc()["c"];
-$participation_rate = $total_residents > 0 ? round(($engaged_residents / $total_residents) * 100, 1) : 0;
+fb_page(function () use (
+    &$total_residents, &$active_surveys, &$total_responses, &$draft_surveys,
+    &$completed_surveys, &$engaged_residents, &$participation_rate,
+    &$residents_last_month, &$responses_last_month, &$active_last_month,
+    &$draft_last_month, &$completed_last_month, &$residents_asof_last_month,
+    &$engaged_last_month, &$participation_last_month,
+    &$trend_residents, &$trend_responses, &$trend_active, &$trend_draft,
+    &$trend_completed, &$trend_participation,
+    &$residents_monthly, &$residents_series, &$responses_monthly,
+    &$responses_series, &$surveys_monthly, &$surveys_series,
+    &$completed_monthly, &$participation_series, &$trend_labels,
+    &$chart_survey_list, &$chart_survey_id, &$answered_count,
+    &$dist_rows, &$donut_heading, &$dist_total
+) {
 
-/* ---------------------------------------------------------
-   "vs last month" comparisons, all computed from real timestamps
---------------------------------------------------------- */
-[$lm_start, $lm_end, ] = month_bounds(1);
+    // CURDATE() in MySQL.
+    $today = date("Y-m-d");
 
-$residents_last_month = (int)($conn->query("SELECT COUNT(*) AS c FROM residents WHERE created_at <= '$lm_end'")->fetch_assoc()["c"]);
-$responses_last_month = (int)($conn->query("SELECT COUNT(*) AS c FROM responses WHERE submitted_at <= '$lm_end'")->fetch_assoc()["c"]);
-$active_last_month = (int)($conn->query("SELECT COUNT(*) AS c FROM surveys WHERE start_date <= '$lm_end' AND end_date >= '$lm_start'")->fetch_assoc()["c"]);
-$draft_last_month = (int)($conn->query("SELECT COUNT(*) AS c FROM surveys WHERE status = 'inactive' AND created_at <= '$lm_end'")->fetch_assoc()["c"]);
-$completed_last_month = (int)($conn->query("SELECT COUNT(*) AS c FROM surveys WHERE end_date <= '$lm_end'")->fetch_assoc()["c"]);
-$residents_asof_last_month = $residents_last_month;
-$engaged_last_month = (int)($conn->query("SELECT COUNT(DISTINCT resident_id) AS c FROM responses WHERE submitted_at <= '$lm_end'")->fetch_assoc()["c"]);
-$participation_last_month = $residents_asof_last_month > 0 ? round(($engaged_last_month / $residents_asof_last_month) * 100, 1) : 0;
+    $residents = array_values(fb_rows("residents"));
+    $responses = array_values(fb_rows("responses"));
+    $surveys   = array_values(fb_rows("surveys"));
 
-$trend_residents = pct_change($total_residents, $residents_last_month);
-$trend_responses = pct_change($total_responses, $responses_last_month);
-$trend_active = pct_change($active_surveys, $active_last_month);
-$trend_draft = pct_change($draft_surveys, $draft_last_month);
-$trend_completed = pct_change($completed_surveys, $completed_last_month);
-$trend_participation = pct_change($participation_rate, $participation_last_month);
-
-/* ---------------------------------------------------------
-   6-month sparklines (oldest -> newest, last point = today)
---------------------------------------------------------- */
-function monthly_new_counts($conn, $table, $date_col, $months = 6) {
-    [$window_start, , ] = month_bounds($months - 1);
-    $rows = $conn->query("SELECT DATE_FORMAT($date_col, '%Y-%m') ym, COUNT(*) c FROM $table WHERE $date_col >= '$window_start' GROUP BY ym");
-    $byMonth = [];
-    while ($r = $rows->fetch_assoc()) { $byMonth[$r["ym"]] = (int)$r["c"]; }
-    $labels = [];
-    for ($i = $months - 1; $i >= 0; $i--) {
-        [$s, , $label] = month_bounds($i);
-        $labels[] = [substr($s, 0, 7), $label];
-    }
-    $out = [];
-    foreach ($labels as [$ym, $label]) { $out[] = ["ym" => $ym, "label" => $label, "new" => $byMonth[$ym] ?? 0]; }
-    return $out;
-}
-
-function cumulative_series($totalNow, $monthly) {
-    $n = count($monthly);
-    $series = array_fill(0, $n, 0);
-    $series[$n - 1] = $totalNow;
-    for ($i = $n - 1; $i > 0; $i--) {
-        $series[$i - 1] = $series[$i] - $monthly[$i]["new"];
-    }
-    return $series;
-}
-
-$residents_monthly = monthly_new_counts($conn, "residents", "created_at");
-$residents_series = cumulative_series($total_residents, $residents_monthly);
-
-$responses_monthly = monthly_new_counts($conn, "responses", "submitted_at");
-$responses_series = cumulative_series($total_responses, $responses_monthly);
-
-$surveys_monthly = monthly_new_counts($conn, "surveys", "created_at");
-$surveys_series = cumulative_series($conn->query("SELECT COUNT(*) c FROM surveys")->fetch_assoc()["c"], $surveys_monthly);
-
-$completed_monthly = [];
-$participation_series = [];
-foreach ($residents_monthly as $i => $m) {
-    $end = month_bounds(count($residents_monthly) - 1 - $i)[1];
-    $r = (int)$conn->query("SELECT COUNT(*) c FROM residents WHERE created_at <= '$end'")->fetch_assoc()["c"];
-    $e = (int)$conn->query("SELECT COUNT(DISTINCT resident_id) c FROM responses WHERE submitted_at <= '$end'")->fetch_assoc()["c"];
-    $completed_monthly[] = (int)$conn->query("SELECT COUNT(*) c FROM surveys WHERE end_date <= '$end'")->fetch_assoc()["c"];
-    $participation_series[] = $r > 0 ? round(($e / $r) * 100, 1) : 0;
-}
-
-/* ---------------------------------------------------------
-   Participation trend (monthly participation rate, for the big line chart)
---------------------------------------------------------- */
-$trend_labels = array_column($residents_monthly, "label");
-
-/* ---------------------------------------------------------
-   Responses by survey (default), or a single survey's own
-   participation if one is picked from the dropdown. "All
-   Surveys" shows how total responses are split across every
-   survey, so the chart stays meaningful as more surveys pile
-   up. Picking one specific survey instead shows how many
-   residents have answered it vs how many haven't yet.
---------------------------------------------------------- */
-$chart_survey_list = $conn->query("SELECT survey_id, title FROM surveys ORDER BY created_at DESC")->fetch_all(MYSQLI_ASSOC);
-$chart_survey_id = (isset($_GET["chart_survey"]) && $_GET["chart_survey"] !== "all") ? (int)$_GET["chart_survey"] : "all";
-$answered_count = 0;
-
-if ($chart_survey_id === "all") {
-    $survey_dist_raw = $conn->query("
-        SELECT s.title, COUNT(r.response_id) AS votes
-        FROM surveys s
-        LEFT JOIN responses r ON r.survey_id = s.survey_id
-        GROUP BY s.survey_id, s.title
-        HAVING votes > 0
-        ORDER BY votes DESC
-    ")->fetch_all(MYSQLI_ASSOC);
-
-    $dist_rows = array_slice($survey_dist_raw, 0, 5);
-    if (count($survey_dist_raw) > 5) {
-        $others_total = array_sum(array_column(array_slice($survey_dist_raw, 5), "votes"));
-        if ($others_total > 0) {
-            $dist_rows[] = ["title" => "Other Surveys", "votes" => $others_total];
+    $count_where = function (array $rows, $predicate) {
+        $n = 0;
+        foreach ($rows as $row) {
+            if ($predicate($row)) {
+                $n++;
+            }
         }
+        return $n;
+    };
+
+    // COUNT(DISTINCT resident_id) over a set of rows.
+    $distinct_residents = function (array $rows) {
+        $ids = array();
+        foreach ($rows as $row) {
+            $id = (string)($row["resident_id"] ?? "");
+            if ($id !== "") {
+                $ids[$id] = true;
+            }
+        }
+        return count($ids);
+    };
+
+    /* ---------------------------------------------------------
+       Current snapshot counts
+    --------------------------------------------------------- */
+    $total_residents = count($residents);
+    $active_surveys = $count_where($surveys, function ($s) use ($today) {
+        return ($s["status"] ?? "") === "active"
+            && strcmp((string)$s["start_date"], $today) <= 0
+            && strcmp((string)$s["end_date"], $today) >= 0;
+    });
+    $total_responses = count($responses);
+    $draft_surveys = $count_where($surveys, function ($s) {
+        return ($s["status"] ?? "") === "inactive";
+    });
+    $completed_surveys = $count_where($surveys, function ($s) use ($today) {
+        return strcmp((string)$s["end_date"], $today) < 0;
+    });
+    $engaged_residents = $distinct_residents($responses);
+    $participation_rate = $total_residents > 0 ? round(($engaged_residents / $total_residents) * 100, 1) : 0;
+
+    /* ---------------------------------------------------------
+       "vs last month" comparisons, all computed from real timestamps
+    --------------------------------------------------------- */
+    [$lm_start, $lm_end, ] = month_bounds(1);
+
+    $residents_last_month = $count_where($residents, function ($r) use ($lm_end) {
+        return strcmp((string)($r["created_at"] ?? ""), $lm_end) <= 0;
+    });
+    $responses_last_month = $count_where($responses, function ($r) use ($lm_end) {
+        return strcmp((string)($r["submitted_at"] ?? ""), $lm_end) <= 0;
+    });
+    $active_last_month = $count_where($surveys, function ($s) use ($lm_start, $lm_end) {
+        return strcmp((string)$s["start_date"], $lm_end) <= 0
+            && strcmp((string)$s["end_date"], $lm_start) >= 0;
+    });
+    $draft_last_month = $count_where($surveys, function ($s) use ($lm_end) {
+        return ($s["status"] ?? "") === "inactive"
+            && strcmp((string)($s["created_at"] ?? ""), $lm_end) <= 0;
+    });
+    $completed_last_month = $count_where($surveys, function ($s) use ($lm_end) {
+        return strcmp((string)$s["end_date"], $lm_end) <= 0;
+    });
+    $residents_asof_last_month = $residents_last_month;
+    $engaged_last_month = $distinct_residents(array_values(array_filter($responses, function ($r) use ($lm_end) {
+        return strcmp((string)($r["submitted_at"] ?? ""), $lm_end) <= 0;
+    })));
+    $participation_last_month = $residents_asof_last_month > 0 ? round(($engaged_last_month / $residents_asof_last_month) * 100, 1) : 0;
+
+    $trend_residents = pct_change($total_residents, $residents_last_month);
+    $trend_responses = pct_change($total_responses, $responses_last_month);
+    $trend_active = pct_change($active_surveys, $active_last_month);
+    $trend_draft = pct_change($draft_surveys, $draft_last_month);
+    $trend_completed = pct_change($completed_surveys, $completed_last_month);
+    $trend_participation = pct_change($participation_rate, $participation_last_month);
+
+    /* ---------------------------------------------------------
+       6-month sparklines (oldest -> newest, last point = today)
+    --------------------------------------------------------- */
+    // Replaces the DATE_FORMAT(...)/GROUP BY helper. The caller passes the
+    // already-fetched rows plus the name of the timestamp column.
+    function monthly_new_counts(array $rows, $date_col, $months = 6) {
+        [$window_start, , ] = month_bounds($months - 1);
+
+        $byMonth = [];
+        foreach ($rows as $row) {
+            $value = (string)($row[$date_col] ?? "");
+            if ($value === "" || strcmp($value, $window_start) < 0) {
+                continue;
+            }
+            $ym = substr($value, 0, 7);
+            $byMonth[$ym] = ($byMonth[$ym] ?? 0) + 1;
+        }
+
+        $labels = [];
+        for ($i = $months - 1; $i >= 0; $i--) {
+            [$s, , $label] = month_bounds($i);
+            $labels[] = [substr($s, 0, 7), $label];
+        }
+        $out = [];
+        foreach ($labels as [$ym, $label]) { $out[] = ["ym" => $ym, "label" => $label, "new" => $byMonth[$ym] ?? 0]; }
+        return $out;
     }
-    $donut_heading = "Responses by Survey";
-} else {
-    $sel_stmt = $conn->prepare("SELECT title FROM surveys WHERE survey_id = ?");
-    $sel_stmt->bind_param("i", $chart_survey_id);
-    $sel_stmt->execute();
-    $sel_survey = $sel_stmt->get_result()->fetch_assoc();
 
-    $ans_stmt = $conn->prepare("SELECT COUNT(DISTINCT resident_id) AS c FROM responses WHERE survey_id = ?");
-    $ans_stmt->bind_param("i", $chart_survey_id);
-    $ans_stmt->execute();
-    $answered_count = (int)$ans_stmt->get_result()->fetch_assoc()["c"];
-    $not_answered_count = max($total_residents - $answered_count, 0);
+    function cumulative_series($totalNow, $monthly) {
+        $n = count($monthly);
+        $series = array_fill(0, $n, 0);
+        $series[$n - 1] = $totalNow;
+        for ($i = $n - 1; $i > 0; $i--) {
+            $series[$i - 1] = $series[$i] - $monthly[$i]["new"];
+        }
+        return $series;
+    }
 
-    $dist_rows = [];
-    if ($answered_count > 0) $dist_rows[] = ["title" => "Answered", "votes" => $answered_count];
-    if ($not_answered_count > 0) $dist_rows[] = ["title" => "Not Yet Answered", "votes" => $not_answered_count];
+    $residents_monthly = monthly_new_counts($residents, "created_at");
+    $residents_series = cumulative_series($total_residents, $residents_monthly);
 
-    $donut_heading = $sel_survey ? $sel_survey["title"] . " - Participation" : "Responses by Survey";
-}
+    $responses_monthly = monthly_new_counts($responses, "submitted_at");
+    $responses_series = cumulative_series($total_responses, $responses_monthly);
 
-$dist_total = array_sum(array_column($dist_rows, "votes"));
+    $surveys_monthly = monthly_new_counts($surveys, "created_at");
+    $surveys_series = cumulative_series(count($surveys), $surveys_monthly);
+
+    $completed_monthly = [];
+    $participation_series = [];
+    foreach ($residents_monthly as $i => $m) {
+        $end = month_bounds(count($residents_monthly) - 1 - $i)[1];
+        $r = $count_where($residents, function ($row) use ($end) {
+            return strcmp((string)($row["created_at"] ?? ""), $end) <= 0;
+        });
+        $e = $distinct_residents(array_values(array_filter($responses, function ($row) use ($end) {
+            return strcmp((string)($row["submitted_at"] ?? ""), $end) <= 0;
+        })));
+        $completed_monthly[] = $count_where($surveys, function ($s) use ($end) {
+            return strcmp((string)$s["end_date"], $end) <= 0;
+        });
+        $participation_series[] = $r > 0 ? round(($e / $r) * 100, 1) : 0;
+    }
+
+    /* ---------------------------------------------------------
+       Participation trend (monthly participation rate, for the big line chart)
+    --------------------------------------------------------- */
+    $trend_labels = array_column($residents_monthly, "label");
+
+    /* ---------------------------------------------------------
+       Responses by survey (default), or a single survey's own
+       participation if one is picked from the dropdown. "All
+       Surveys" shows how total responses are split across every
+       survey, so the chart stays meaningful as more surveys pile
+       up. Picking one specific survey instead shows how many
+       residents have answered it vs how many haven't yet.
+    --------------------------------------------------------- */
+    $chart_survey_list = array();
+    foreach ($surveys as $survey) {
+        $chart_survey_list[] = array(
+            "survey_id"   => $survey["id"],
+            "title"       => $survey["title"] ?? "",
+            // needed by the newest-first sort below
+            "created_at"  => $survey["created_at"] ?? "",
+        );
+    }
+    usort($chart_survey_list, function ($a, $b) {
+        return strcmp((string)$b["created_at"], (string)$a["created_at"]);
+    });
+
+    $chart_survey_id = (isset($_GET["chart_survey"]) && $_GET["chart_survey"] !== "all") ? (int)$_GET["chart_survey"] : "all";
+    $answered_count = 0;
+
+    if ($chart_survey_id === "all") {
+
+        // The GROUP BY s.survey_id, s.title with a HAVING votes > 0.
+        $votes_by_survey = [];
+        foreach ($responses as $response) {
+            $survey_id = (string)($response["survey_id"] ?? "");
+            $votes_by_survey[$survey_id] = ($votes_by_survey[$survey_id] ?? 0) + 1;
+        }
+
+        $survey_dist_raw = [];
+        foreach ($surveys as $survey) {
+            $votes = $votes_by_survey[(string)$survey["id"]] ?? 0;
+            if ($votes > 0) {
+                $survey_dist_raw[] = array("title" => $survey["title"] ?? "", "votes" => $votes);
+            }
+        }
+        usort($survey_dist_raw, function ($a, $b) {
+            return $b["votes"] <=> $a["votes"];
+        });
+
+        $dist_rows = array_slice($survey_dist_raw, 0, 5);
+        if (count($survey_dist_raw) > 5) {
+            $others_total = array_sum(array_column(array_slice($survey_dist_raw, 5), "votes"));
+            if ($others_total > 0) {
+                $dist_rows[] = ["title" => "Other Surveys", "votes" => $others_total];
+            }
+        }
+        $donut_heading = "Responses by Survey";
+    } else {
+
+        $sel_survey = null;
+        foreach ($surveys as $survey) {
+            if ((string)$survey["id"] === (string)$chart_survey_id) {
+                $sel_survey = $survey;
+                break;
+            }
+        }
+
+        $answered_count = $distinct_residents(array_values(array_filter($responses, function ($r) use ($chart_survey_id) {
+            return (string)($r["survey_id"] ?? "") === (string)$chart_survey_id;
+        })));
+        $not_answered_count = max($total_residents - $answered_count, 0);
+
+        $dist_rows = [];
+        if ($answered_count > 0) $dist_rows[] = ["title" => "Answered", "votes" => $answered_count];
+        if ($not_answered_count > 0) $dist_rows[] = ["title" => "Not Yet Answered", "votes" => $not_answered_count];
+
+        $donut_heading = $sel_survey ? $sel_survey["title"] . " - Participation" : "Responses by Survey";
+    }
+
+    $dist_total = array_sum(array_column($dist_rows, "votes"));
+});
+
 $dist_colors = ["#147a63", "#1fae82", "#58c9a0", "#f5a623", "#3b6fed", "#6b7d78"];
 ?>
 <!DOCTYPE html>

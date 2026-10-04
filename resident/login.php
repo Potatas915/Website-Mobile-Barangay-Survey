@@ -8,83 +8,71 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $resident_number = trim($_POST["resident_number"]);
     $password = $_POST["password"];
 
-    $stmt = $conn->prepare(
-        "SELECT resident_id, first_name, last_name, password, is_first_login, status
-         FROM residents
-         WHERE resident_number = ?"
-    );
+    fb_page(function () use ($resident_number, $password, &$error) {
 
-    $stmt->bind_param("s", $resident_number);
-    $stmt->execute();
+        $resident = fb_resident_by_number($resident_number);
 
-    $result = $stmt->get_result();
+        // An unknown Resident Number and a wrong password get the same
+        // message, so the form never reveals which numbers exist.
 
+        if (!$resident) {
 
-    if ($result->num_rows === 1) {
+            $error = "Incorrect resident number or password.";
 
-        $resident = $result->fetch_assoc();
-
-
-        if ($resident["status"] === "archived") {
-
-            $error =
-                "This account has been deactivated. Please contact the barangay office.";
-
-        } else if (password_verify($password, $resident["password"])) {
-
-            $_SESSION["resident_id"] =
-                $resident["resident_id"];
-
-            $_SESSION["resident_name"] =
-                $resident["first_name"] . " " .
-                $resident["last_name"];
-
-
-            // Log the login
-
-            $log = $conn->prepare(
-                "INSERT INTO login_history (user_type, user_id)
-                 VALUES ('resident', ?)"
-            );
-
-            $log->bind_param(
-                "i",
-                $resident["resident_id"]
-            );
-
-            $log->execute();
-
-
-            // Check if this is the resident's first login
-
-            if ($resident["is_first_login"] == 1) {
-
-                redirect("change_password.php");
-
-            } else {
-
-                redirect("dashboard.php");
-
-            }
-
-
-        } else {
-
-            $error =
-                "Incorrect resident number or password.";
+            return;
 
         }
 
 
-    } else {
+        if (($resident["status"] ?? "") === "archived") {
 
-        $error =
-            "Incorrect resident number or password.";
+            $error =
+                "This account has been deactivated. Please contact the barangay office.";
 
-    }
+            return;
+
+        }
 
 
-    $stmt->close();
+        // Passwords are stored in plain text, so this is a straight
+        // comparison. hash_equals keeps it constant-time so a wrong password
+        // cannot be guessed one character at a time by timing the response.
+        if (!hash_equals((string)($resident["password"] ?? ""), (string)$password)) {
+
+            $error =
+                "Incorrect resident number or password.";
+
+            return;
+
+        }
+
+
+        $_SESSION["resident_id"] = $resident["id"];
+
+        $_SESSION["resident_name"] =
+            $resident["first_name"] . " " . $resident["last_name"];
+
+
+        // Log the login
+
+        fb_insert("login_history", array(
+            "user_type" => "resident",
+            "user_id"   => $resident["id"],
+            "login_time" => date("Y-m-d H:i:s"),
+        ));
+
+
+        // Check if this is the resident's first login
+
+        if ((int)($resident["is_first_login"] ?? 0) === 1) {
+
+            redirect("change_password.php");
+
+        }
+
+        redirect("dashboard.php");
+
+    });
 }
 ?>
 

@@ -14,6 +14,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $questions_required = $_POST["question_required"] ?? [];
     $choices = $_POST["choices"] ?? [];
 
+    $valid_types = ["multiple_choice", "yes_no", "rating", "short_answer"];
+
     if ($title === "" || $start_date === "" || $end_date === "" || count($questions_text) === 0) {
         $error = "Please fill in the survey title, dates, and at least one question.";
     } elseif (!is_valid_start_date($start_date)) {
@@ -21,58 +23,102 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     } elseif ($end_date < $start_date) {
         $error = "End date cannot be earlier than the start date.";
     } else {
-        $conn->begin_transaction();
-        try {
-            $staff_id = $_SESSION["staff_id"];
-            $stmt = $conn->prepare("INSERT INTO surveys (title, description, created_by, start_date, end_date, status) VALUES (?, ?, ?, ?, ?, 'active')");
-            $stmt->bind_param("ssiss", $title, $description, $staff_id, $start_date, $end_date);
-            $stmt->execute();
-            $survey_id = $conn->insert_id;
 
-            $q_stmt = $conn->prepare("INSERT INTO survey_questions (survey_id, question_text, question_type, is_required, question_order) VALUES (?, ?, ?, ?, ?)");
-            $c_stmt = $conn->prepare("INSERT INTO survey_choices (question_id, choice_text, choice_order) VALUES (?, ?, ?)");
+        // The old code opened a transaction because it inserted the survey and
+        // every question/choice as separate rows. Firebase stores the questions
+        // and choices inside the survey, so the whole survey is written with a
+        // single PUT - it can never end up half-created.
+        $questions = array();
+        $order = 0;
 
-            foreach ($questions_text as $index => $qtext) {
-                $qtext = trim($qtext);
-                if ($qtext === "") continue;
-                $qtype = $questions_type[$index];
-                $required = isset($questions_required[$index]) ? 1 : 0;
-                $order = $index + 1;
+        foreach ($questions_text as $index => $qtext) {
+            $qtext = trim($qtext);
+            if ($qtext === "") continue;
 
-                $q_stmt->bind_param("issii", $survey_id, $qtext, $qtype, $required, $order);
-                $q_stmt->execute();
-                $question_id = $conn->insert_id;
+            $qtype = $questions_type[$index] ?? "";
+            if (!in_array($qtype, $valid_types, true)) continue;
 
-                if ($qtype === "yes_no") {
-                    foreach (["Yes", "No"] as $i => $label) {
-                        $order_c = $i + 1;
-                        $c_stmt->bind_param("isi", $question_id, $label, $order_c);
-                        $c_stmt->execute();
-                    }
-                } elseif ($qtype === "rating") {
-                    $labels = ["1 - Very Dissatisfied", "2 - Dissatisfied", "3 - Neutral", "4 - Satisfied", "5 - Very Satisfied"];
-                    foreach ($labels as $i => $label) {
-                        $order_c = $i + 1;
-                        $c_stmt->bind_param("isi", $question_id, $label, $order_c);
-                        $c_stmt->execute();
-                    }
-                } elseif ($qtype === "multiple_choice" && isset($choices[$index])) {
-                    $order_c = 0;
-                    foreach ($choices[$index] as $choice_text) {
-                        $choice_text = trim($choice_text);
-                        if ($choice_text === "") continue;
-                        $order_c++;
-                        $c_stmt->bind_param("isi", $question_id, $choice_text, $order_c);
-                        $c_stmt->execute();
-                    }
+            // An unchecked checkbox is simply not posted, but anything that can
+            // post this form may send an explicit 0, so check the value.
+            $required = !empty($questions_required[$index]) && $questions_required[$index] !== "0" ? 1 : 0;
+            $order++;
+
+            $question_id = (string)$order;
+            $row = array(
+                "question_id"    => $question_id,
+                "question_text"  => $qtext,
+                "question_type"  => $qtype,
+                "is_required"    => $required,
+                "question_order" => $order,
+                "choices"        => array(),
+            );
+
+            if ($qtype === "yes_no") {
+                foreach (["Yes", "No"] as $i => $label) {
+                    $row["choices"][(string)($i + 1)] = array(
+                        "choice_id"    => (string)($i + 1),
+                        "question_id"  => $question_id,
+                        "choice_text"  => $label,
+                        "choice_order" => $i + 1,
+                    );
+                }
+            } elseif ($qtype === "rating") {
+                $labels = ["1 - Very Dissatisfied", "2 - Dissatisfied", "3 - Neutral", "4 - Satisfied", "5 - Very Satisfied"];
+                foreach ($labels as $i => $label) {
+                    $row["choices"][(string)($i + 1)] = array(
+                        "choice_id"    => (string)($i + 1),
+                        "question_id"  => $question_id,
+                        "choice_text"  => $label,
+                        "choice_order" => $i + 1,
+                    );
+                }
+            } elseif ($qtype === "multiple_choice" && isset($choices[$index])) {
+                $order_c = 0;
+                foreach ($choices[$index] as $choice_text) {
+                    $choice_text = trim($choice_text);
+                    if ($choice_text === "") continue;
+                    $order_c++;
+                    $row["choices"][(string)$order_c] = array(
+                        "choice_id"    => (string)$order_c,
+                        "question_id"  => $question_id,
+                        "choice_text"  => $choice_text,
+                        "choice_order" => $order_c,
+                    );
                 }
             }
 
-            $conn->commit();
+            $questions[$question_id] = $row;
+        }
+
+        if (count($questions) === 0) {
+            $error = "Please add at least one question.";
+        } else {
+            fb_page(function () use ($title, $description, $start_date, $end_date, $questions) {
+
+                $staff_id = (string)$_SESSION["staff_id"];
+                $now = date("Y-m-d H:i:s");
+
+                // fb_insert() allocates the id and puts it in the row key, the
+                // same place AUTO_INCREMENT put it before, so there is no
+                // survey_id field to write. Calling fb_next_id() here as well
+                // would burn two ids and skip a number.
+                fb_insert("surveys", array(
+                    "title"       => $title,
+                    "description" => $description,
+                    "status"      => "active",
+                    "start_date"  => $start_date,
+                    "end_date"    => $end_date,
+                    "created_by"  => $staff_id,
+                    "created_at"  => $now,
+                    "updated_at"  => $now,
+                    "questions"   => $questions,
+                ));
+
+                // Keep the global counter ahead of the ids we just used.
+                $counter = (int)fb_get("counters/survey_questions");
+                fb_set("counters/survey_questions", max($counter, count($questions)));
+            });
             redirect("survey_management.php");
-        } catch (Exception $e) {
-            $conn->rollback();
-            $error = "Something went wrong while saving the survey. Please try again.";
         }
     }
 }

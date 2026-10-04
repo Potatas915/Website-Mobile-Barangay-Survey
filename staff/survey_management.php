@@ -4,15 +4,42 @@ require_staff_login();
 
 // toggle active/inactive
 if (isset($_GET["toggle"])) {
-    $survey_id = (int)$_GET["toggle"];
-    $conn->query("UPDATE surveys SET status = IF(status = 'active', 'inactive', 'active') WHERE survey_id = $survey_id");
+    $survey_id = (string)(int)$_GET["toggle"];
+    fb_page(function () use ($survey_id) {
+        $survey = fb_get("surveys/" . $survey_id);
+        if (is_array($survey)) {
+            fb_update("surveys", $survey_id, array(
+                "status" => ($survey["status"] ?? "") === "active" ? "inactive" : "active",
+            ));
+        }
+    });
     redirect("survey_management.php");
 }
 
-$surveys = $conn->query("SELECT s.survey_id, s.title, s.start_date, s.end_date, s.status,
-    (SELECT COUNT(*) FROM responses r WHERE r.survey_id = s.survey_id) AS response_count
-    FROM surveys s ORDER BY s.created_at DESC");
+fb_page(function () use (&$surveys) {
+
+    // The response_count subquery becomes a count over the responses we
+    // already hold for the whole page.
+    $counts = array();
+    foreach (fb_rows("responses") as $response) {
+        $survey_id = (string)($response["survey_id"] ?? "");
+        $counts[$survey_id] = ($counts[$survey_id] ?? 0) + 1;
+    }
+
+    $surveys = array();
+    foreach (fb_rows("surveys") as $survey) {
+        $survey["survey_id"] = $survey["id"];
+        $survey["response_count"] = $counts[(string)$survey["id"]] ?? 0;
+        $surveys[] = $survey;
+    }
+
+    // The old query ended with ORDER BY created_at DESC.
+    usort($surveys, function ($a, $b) {
+        return strcmp((string)$b["created_at"], (string)$a["created_at"]);
+    });
+});
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -40,7 +67,7 @@ $surveys = $conn->query("SELECT s.survey_id, s.title, s.start_date, s.end_date, 
                 <th>Responses</th>
                 <th>Actions</th>
             </tr>
-            <?php while ($s = $surveys->fetch_assoc()): ?>
+            <?php foreach ($surveys as $s): ?>
             <tr>
                 <td><?= e($s["title"]) ?></td>
                 <td><?= e($s["start_date"]) ?></td>
@@ -91,7 +118,7 @@ $surveys = $conn->query("SELECT s.survey_id, s.title, s.start_date, s.end_date, 
                     </div>
                 </td>
             </tr>
-            <?php endwhile; ?>
+            <?php endforeach; ?>
         </table>
         </div>
     </div>

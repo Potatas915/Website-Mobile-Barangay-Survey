@@ -6,7 +6,7 @@ require_resident_login();
 
 
 $resident_id =
-    (int) $_SESSION["resident_id"];
+    (string) $_SESSION["resident_id"];
 
 
 $success = "";
@@ -28,42 +28,49 @@ $child_error = "";
 */
 
 function get_profile_resident(
-    $conn,
     $resident_id
 ) {
 
-    $stmt =
-        $conn->prepare("
-            SELECT *
-            FROM residents
-            WHERE resident_id = ?
-            LIMIT 1
-        ");
+    $resident =
+        fb_get(
+            "residents/" .
+            $resident_id
+        );
 
 
-    if (!$stmt) {
+    if (
+        !is_array(
+            $resident
+        )
+    ) {
 
         return null;
 
     }
 
 
-    $stmt->bind_param(
-        "i",
-        $resident_id
-    );
+    // Firebase keeps a field the site never wrote out of the row entirely,
+    // where MySQL would have handed back NULL. Filling the blanks in here
+    // means the form can read every field without testing each one.
 
+    foreach (
+        blank_resident_row()
+        as $field =>
+        $ignored
+    ) {
 
-    $stmt->execute();
+        if (
+            !array_key_exists(
+                $field,
+                $resident
+            )
+        ) {
 
+            $resident[$field] = "";
 
-    $resident =
-        $stmt
-            ->get_result()
-            ->fetch_assoc();
+        }
 
-
-    $stmt->close();
+    }
 
 
     return $resident;
@@ -78,68 +85,48 @@ function get_profile_resident(
 */
 
 function get_profile_children(
-    $conn,
     $resident_id
 ) {
 
     $children = [];
 
 
-    $stmt =
-        $conn->prepare("
-            SELECT
-                child_id,
-                child_name,
-                age
-            FROM resident_children
-            WHERE resident_id = ?
-            ORDER BY child_id ASC
-        ");
-
-
-    if (!$stmt) {
-
-        return $children;
-
-    }
-
-
-    $stmt->bind_param(
-        "i",
-        $resident_id
-    );
-
-
-    $stmt->execute();
-
-
-    $result =
-        $stmt
-            ->get_result();
-
-
-    while (
-        $row =
-        $result->fetch_assoc()
+    foreach (
+        fb_rows(
+            "residents/" .
+            $resident_id .
+            "/children"
+        )
+        as $child_id =>
+        $row
     ) {
 
         $children[] = [
 
             "child_id" =>
-                (int) $row["child_id"],
+                (int)$child_id,
 
             "child_name" =>
-                $row["child_name"],
+                $row["child_name"] ?? "",
 
             "age" =>
-                $row["age"]
+                $row["age"] ?? ""
 
         ];
 
     }
 
 
-    $stmt->close();
+    // The old query ended with ORDER BY child_id ASC.
+    usort(
+        $children,
+        function ($a, $b) {
+
+            return $a["child_id"] <=>
+                $b["child_id"];
+
+        }
+    );
 
 
     return $children;
@@ -163,13 +150,11 @@ function get_profile_children(
 */
 
 function build_profile_snapshot(
-    $conn,
     $resident_id
 ) {
 
     $resident =
         get_profile_resident(
-            $conn,
             $resident_id
         );
 
@@ -183,13 +168,11 @@ function build_profile_snapshot(
 
     $children =
         get_profile_children(
-            $conn,
             $resident_id
         );
 
 
     $clean_children = [];
-
 
     foreach (
         $children
@@ -329,11 +312,12 @@ function build_profile_snapshot(
 */
 
 function save_profile_history(
-    $conn,
     $resident_id,
     $old_snapshot,
     $new_snapshot,
-    $section = "complete_profile"
+    $section = "complete_profile",
+    $updated_by_type = "resident",
+    $updated_by_id = null
 ) {
 
     if (
@@ -396,63 +380,35 @@ function save_profile_history(
         );
 
 
-    $stmt =
-        $conn->prepare("
-            INSERT INTO resident_update_history
-            (
-                resident_id,
-                updated_by_type,
-                updated_by_id,
-                update_section,
-                old_data,
-                new_data
-            )
-            VALUES
-            (
-                ?,
-                'resident',
-                ?,
-                ?,
-                ?,
-                ?
-            )
-        ");
+    fb_insert(
+        "resident_update_history",
+        [
 
+            "resident_id" =>
+                (string)$resident_id,
 
-    if (!$stmt) {
+            "updated_by_type" =>
+                $updated_by_type,
 
-        throw new Exception(
-            "Unable to prepare update history."
-        );
+            "updated_by_id" =>
+                $updated_by_id === null
+                    ? (string)$resident_id
+                    : (string)$updated_by_id,
 
-    }
+            "update_section" =>
+                $section,
 
+            "old_data" =>
+                $old_data,
 
-    $stmt->bind_param(
-        "iisss",
-        $resident_id,
-        $resident_id,
-        $section,
-        $old_data,
-        $new_data
+            "new_data" =>
+                $new_data,
+
+            "updated_at" =>
+                date("Y-m-d H:i:s")
+
+        ]
     );
-
-
-    if (
-        !$stmt->execute()
-    ) {
-
-        $stmt->close();
-
-
-        throw new Exception(
-            "Unable to save update history."
-        );
-
-    }
-
-
-    $stmt->close();
 
 
     return true;
@@ -467,16 +423,21 @@ function save_profile_history(
 */
 
 $resident =
-    get_profile_resident(
-        $conn,
-        $resident_id
+    fb_page(
+        function () use ($resident_id) {
+
+            return get_profile_resident(
+                $resident_id
+            );
+
+        }
     );
 
 
 if (!$resident) {
 
     redirect(
-        "../login.php"
+        "login.php"
     );
 
 }
@@ -499,147 +460,168 @@ if (
     $first_name =
         trim(
             $_POST["first_name"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $middle_name =
         trim(
             $_POST["middle_name"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $last_name =
         trim(
             $_POST["last_name"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $extension_name =
         trim(
             $_POST["extension_name"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $civil_status =
         trim(
             $_POST["civil_status"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $email =
         trim(
             $_POST["email"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $contact_number =
         trim(
             $_POST["contact_number"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $address =
         trim(
             $_POST["address"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $birthday =
         trim(
             $_POST["birthday"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $occupation =
         trim(
             $_POST["occupation"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $employer =
         trim(
             $_POST["employer"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $employer_address =
         trim(
             $_POST["employer_address"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $father_name =
         trim(
             $_POST["father_name"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $mother_name =
         trim(
             $_POST["mother_name"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $spouse_name =
         trim(
             $_POST["spouse_name"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $spouse_occupation =
         trim(
             $_POST["spouse_occupation"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $spouse_employer =
         trim(
             $_POST["spouse_employer"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $reference1_name =
         trim(
             $_POST["reference1_name"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $reference1_signature =
         trim(
             $_POST["reference1_signature"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $reference2_name =
         trim(
             $_POST["reference2_name"]
-            ?? ""
+            ??
+            ""
         );
 
 
     $reference2_signature =
         trim(
             $_POST["reference2_signature"]
-            ?? ""
+            ??
+            ""
         );
 
 
@@ -801,9 +783,6 @@ if (
 
         try {
 
-            $conn->begin_transaction();
-
-
             /*
             |--------------------------------------------------------------------------
             | BEFORE
@@ -812,7 +791,6 @@ if (
 
             $old_snapshot =
                 build_profile_snapshot(
-                    $conn,
                     $resident_id
                 );
 
@@ -829,106 +807,49 @@ if (
                 );
 
 
-            $birthday_sql =
-                $birthday !== ""
-                    ? $birthday
-                    : null;
-
-
-            $civil_status_sql =
-                $civil_status !== ""
-                    ? $civil_status
-                    : null;
-
-
             /*
             |--------------------------------------------------------------------------
             | UPDATE RESIDENT
             |--------------------------------------------------------------------------
+            |
+            | There is no transaction here: the resident row and the history
+            | row are two separate writes, so a failure part way through can
+            | leave one without the other. The history is written second and
+            | reports itself as the failure, which is the safe order to retry
+            | from.
+            |
+            |--------------------------------------------------------------------------
             */
 
-            $stmt =
-                $conn->prepare("
-                    UPDATE residents
-                    SET
-                        first_name = ?,
-                        middle_name = ?,
-                        last_name = ?,
-                        extension_name = ?,
-                        civil_status = ?,
-                        email = ?,
-                        contact_number = ?,
-                        address = ?,
-                        birthday = ?,
-                        age = ?,
-                        occupation = ?,
-                        employer = ?,
-                        employer_address = ?,
-                        father_name = ?,
-                        mother_name = ?,
-                        spouse_name = ?,
-                        spouse_occupation = ?,
-                        spouse_employer = ?,
-                        reference1_name = ?,
-                        reference1_signature = ?,
-                        reference2_name = ?,
-                        reference2_signature = ?
-                    WHERE resident_id = ?
-                ");
-
-
-            if (!$stmt) {
-
-                throw new Exception(
-                    "Unable to prepare profile update."
-                );
-
-            }
-
-
-            $stmt->bind_param(
-                "sssssssssissssssssssssi",
-                $first_name,
-                $middle_name,
-                $last_name,
-                $extension_name,
-                $civil_status_sql,
-                $email,
-                $contact_number,
-                $address,
-                $birthday_sql,
-                $age,
-                $occupation,
-                $employer,
-                $employer_address,
-                $father_name,
-                $mother_name,
-                $spouse_name,
-                $spouse_occupation,
-                $spouse_employer,
-                $reference1_name,
-                $reference1_signature,
-                $reference2_name,
-                $reference2_signature,
-                $resident_id
+            fb_update(
+                "residents",
+                $resident_id,
+                [
+                    "first_name" => $first_name,
+                    "middle_name" => $middle_name,
+                    "last_name" => $last_name,
+                    "extension_name" => $extension_name,
+                    "civil_status" => $civil_status,
+                    "email" => $email,
+                    "contact_number" => $contact_number,
+                    "address" => $address,
+                    "birthday" => $birthday,
+                    "age" => $age === null ? "" : $age,
+                    "occupation" => $occupation,
+                    "employer" => $employer,
+                    "employer_address" => $employer_address,
+                    "father_name" => $father_name,
+                    "mother_name" => $mother_name,
+                    "spouse_name" => $spouse_name,
+                    "spouse_occupation" => $spouse_occupation,
+                    "spouse_employer" => $spouse_employer,
+                    "reference1_name" => $reference1_name,
+                    "reference1_signature" => $reference1_signature,
+                    "reference2_name" => $reference2_name,
+                    "reference2_signature" => $reference2_signature,
+                    "updated_at" => date("Y-m-d H:i:s")
+                ]
             );
-
-
-            if (
-                !$stmt->execute()
-            ) {
-
-                $stmt->close();
-
-
-                throw new Exception(
-                    "Unable to update profile."
-                );
-
-            }
-
-
-            $stmt->close();
 
 
             /*
@@ -939,7 +860,6 @@ if (
 
             $new_snapshot =
                 build_profile_snapshot(
-                    $conn,
                     $resident_id
                 );
 
@@ -951,15 +871,11 @@ if (
             */
 
             save_profile_history(
-                $conn,
                 $resident_id,
                 $old_snapshot,
                 $new_snapshot,
                 "complete_profile"
             );
-
-
-            $conn->commit();
 
 
             /*
@@ -988,7 +904,6 @@ if (
 
             $resident =
                 get_profile_resident(
-                    $conn,
                     $resident_id
                 );
 
@@ -996,17 +911,6 @@ if (
         catch (
             Throwable $exception
         ) {
-
-            try {
-
-                $conn->rollback();
-
-            }
-            catch (
-                Throwable $rollback_exception
-            ) {
-            }
-
 
             $error =
                 "Unable to update profile. Please try again.";
@@ -1055,9 +959,6 @@ if (
 
         try {
 
-            $conn->begin_transaction();
-
-
             /*
             |--------------------------------------------------------------------------
             | BEFORE
@@ -1066,47 +967,12 @@ if (
 
             $old_snapshot =
                 build_profile_snapshot(
-                    $conn,
                     $resident_id
                 );
 
 
-            $old =
-                $conn->prepare("
-                    SELECT photo
-                    FROM residents
-                    WHERE resident_id = ?
-                    LIMIT 1
-                ");
-
-
-            if (!$old) {
-
-                throw new Exception(
-                    "Unable to load current photo."
-                );
-
-            }
-
-
-            $old->bind_param(
-                "i",
-                $resident_id
-            );
-
-
-            $old->execute();
-
-
             $old_photo =
-                $old
-                    ->get_result()
-                    ->fetch_assoc()["photo"]
-                    ??
-                    null;
-
-
-            $old->close();
+                $resident["photo"] ?? "";
 
 
             /*
@@ -1115,45 +981,14 @@ if (
             |--------------------------------------------------------------------------
             */
 
-            $stmt =
-                $conn->prepare("
-                    UPDATE residents
-                    SET photo = ?
-                    WHERE resident_id = ?
-                ");
-
-
-            if (!$stmt) {
-
-                throw new Exception(
-                    "Unable to prepare photo update."
-                );
-
-            }
-
-
-            $stmt->bind_param(
-                "si",
-                $new_photo,
-                $resident_id
+            fb_update(
+                "residents",
+                $resident_id,
+                [
+                    "photo" => $new_photo,
+                    "updated_at" => date("Y-m-d H:i:s")
+                ]
             );
-
-
-            if (
-                !$stmt->execute()
-            ) {
-
-                $stmt->close();
-
-
-                throw new Exception(
-                    "Unable to save photo."
-                );
-
-            }
-
-
-            $stmt->close();
 
 
             /*
@@ -1164,7 +999,6 @@ if (
 
             $new_snapshot =
                 build_profile_snapshot(
-                    $conn,
                     $resident_id
                 );
 
@@ -1204,67 +1038,27 @@ if (
                 $new_photo
             ) {
 
-                $history =
-                    $conn->prepare("
-                        INSERT INTO resident_update_history
-                        (
-                            resident_id,
-                            updated_by_type,
-                            updated_by_id,
-                            update_section,
-                            old_data,
-                            new_data
-                        )
-                        VALUES
-                        (
-                            ?,
-                            'resident',
-                            ?,
-                            'photo',
-                            ?,
-                            ?
-                        )
-                    ");
-
-
-                if (!$history) {
-
-                    throw new Exception(
-                        "Unable to prepare photo history."
-                    );
-
-                }
-
-
-                $history->bind_param(
-                    "iiss",
-                    $resident_id,
-                    $resident_id,
-                    $old_photo_data,
-                    $new_photo_data
+                fb_insert(
+                    "resident_update_history",
+                    [
+                        "resident_id" =>
+                            (string)$resident_id,
+                        "updated_by_type" =>
+                            "resident",
+                        "updated_by_id" =>
+                            (string)$resident_id,
+                        "update_section" =>
+                            "photo",
+                        "old_data" =>
+                            $old_photo_data,
+                        "new_data" =>
+                            $new_photo_data,
+                        "updated_at" =>
+                            date("Y-m-d H:i:s")
+                    ]
                 );
 
-
-                if (
-                    !$history->execute()
-                ) {
-
-                    $history->close();
-
-
-                    throw new Exception(
-                        "Unable to save photo history."
-                    );
-
-                }
-
-
-                $history->close();
-
             }
-
-
-            $conn->commit();
 
 
             /*
@@ -1290,7 +1084,6 @@ if (
 
             $resident =
                 get_profile_resident(
-                    $conn,
                     $resident_id
                 );
 
@@ -1298,17 +1091,6 @@ if (
         catch (
             Throwable $exception
         ) {
-
-            try {
-
-                $conn->rollback();
-
-            }
-            catch (
-                Throwable $rollback_exception
-            ) {
-            }
-
 
             /*
             |--------------------------------------------------------------------------
@@ -1416,9 +1198,6 @@ if (
 
         try {
 
-            $conn->begin_transaction();
-
-
             /*
             |--------------------------------------------------------------------------
             | BEFORE
@@ -1427,72 +1206,37 @@ if (
 
             $old_snapshot =
                 build_profile_snapshot(
-                    $conn,
                     $resident_id
                 );
-
-
-            $child_age_sql =
-                $child_age !== ""
-                    ? (int)$child_age
-                    : null;
 
 
             /*
             |--------------------------------------------------------------------------
             | Insert Child
             |--------------------------------------------------------------------------
+            |
+            | Children live under their resident, so removing the resident
+            | removes them too, which is what ON DELETE CASCADE did.
+            |
+            |--------------------------------------------------------------------------
             */
 
-            $stmt =
-                $conn->prepare("
-                    INSERT INTO resident_children
-                    (
-                        resident_id,
-                        child_name,
-                        age
-                    )
-                    VALUES
-                    (
-                        ?,
-                        ?,
-                        ?
-                    )
-                ");
-
-
-            if (!$stmt) {
-
-                throw new Exception(
-                    "Unable to prepare child record."
-                );
-
-            }
-
-
-            $stmt->bind_param(
-                "isi",
-                $resident_id,
-                $child_name,
-                $child_age_sql
+            fb_raw(
+                "PUT",
+                "residents/" .
+                $resident_id .
+                "/children/" .
+                fb_next_id("resident_children"),
+                [
+                    "child_name" => $child_name,
+                    "age" =>
+                        $child_age === ""
+                            ? ""
+                            : (int)$child_age
+                ]
             );
 
-
-            if (
-                !$stmt->execute()
-            ) {
-
-                $stmt->close();
-
-
-                throw new Exception(
-                    "Unable to add child."
-                );
-
-            }
-
-
-            $stmt->close();
+            fb_forget();
 
 
             /*
@@ -1503,21 +1247,16 @@ if (
 
             $new_snapshot =
                 build_profile_snapshot(
-                    $conn,
                     $resident_id
                 );
 
 
             save_profile_history(
-                $conn,
                 $resident_id,
                 $old_snapshot,
                 $new_snapshot,
                 "children"
             );
-
-
-            $conn->commit();
 
 
             $success =
@@ -1527,17 +1266,6 @@ if (
         catch (
             Throwable $exception
         ) {
-
-            try {
-
-                $conn->rollback();
-
-            }
-            catch (
-                Throwable $rollback_exception
-            ) {
-            }
-
 
             $child_error =
                 "Unable to add child. Please try again.";
@@ -1562,18 +1290,15 @@ if (
 ) {
 
     $child_id =
-        (int)
+        (string)(int)
         $_GET["delete_child"];
 
 
     if (
-        $child_id > 0
+        $child_id !== "0"
     ) {
 
         try {
-
-            $conn->begin_transaction();
-
 
             /*
             |--------------------------------------------------------------------------
@@ -1583,7 +1308,6 @@ if (
 
             $old_snapshot =
                 build_profile_snapshot(
-                    $conn,
                     $resident_id
                 );
 
@@ -1592,55 +1316,20 @@ if (
             |--------------------------------------------------------------------------
             | Delete only this resident's child
             |--------------------------------------------------------------------------
+            |
+            | The child key sits under this resident, so a child id that
+            | belongs to somebody else simply is not there.
+            |
+            |--------------------------------------------------------------------------
             */
 
-            $stmt =
-                $conn->prepare("
-                    DELETE FROM resident_children
-                    WHERE child_id = ?
-                    AND resident_id = ?
-                ");
-
-
-            if (!$stmt) {
-
-                throw new Exception(
-                    "Unable to prepare child deletion."
-                );
-
-            }
-
-
-            $stmt->bind_param(
-                "ii",
-                $child_id,
-                $resident_id
-            );
-
-
             if (
-                !$stmt->execute()
-            ) {
-
-                $stmt->close();
-
-
-                throw new Exception(
-                    "Unable to remove child."
-                );
-
-            }
-
-
-            $deleted =
-                $stmt->affected_rows;
-
-
-            $stmt->close();
-
-
-            if (
-                $deleted === 0
+                !fb_get(
+                    "residents/" .
+                    $resident_id .
+                    "/children/" .
+                    $child_id
+                )
             ) {
 
                 throw new Exception(
@@ -1648,6 +1337,14 @@ if (
                 );
 
             }
+
+
+            fb_remove(
+                "residents/" .
+                $resident_id .
+                "/children/" .
+                $child_id
+            );
 
 
             /*
@@ -1658,21 +1355,16 @@ if (
 
             $new_snapshot =
                 build_profile_snapshot(
-                    $conn,
                     $resident_id
                 );
 
 
             save_profile_history(
-                $conn,
                 $resident_id,
                 $old_snapshot,
                 $new_snapshot,
                 "children"
             );
-
-
-            $conn->commit();
 
 
             redirect(
@@ -1683,17 +1375,6 @@ if (
         catch (
             Throwable $exception
         ) {
-
-            try {
-
-                $conn->rollback();
-
-            }
-            catch (
-                Throwable $rollback_exception
-            ) {
-            }
-
 
             $child_error =
                 "Unable to remove child. Please try again.";
@@ -1740,142 +1421,84 @@ if (
         "";
 
 
-    $stmt =
-        $conn->prepare("
-            SELECT password
-            FROM residents
-            WHERE resident_id = ?
-            LIMIT 1
-        ");
-
-
-    if (
-        !$stmt
-    ) {
-
-        $password_error =
-            "Unable to verify your current password.";
-
-    }
-    else {
-
-        $stmt->bind_param(
-            "i",
+    $row =
+        get_profile_resident(
             $resident_id
         );
 
 
-        $stmt->execute();
+    if (
+        !$row
+    ) {
+
+        $password_error =
+            "Resident account could not be found.";
+
+    }
 
 
-        $row =
-            $stmt
-                ->get_result()
-                ->fetch_assoc();
+    elseif (
+        !hash_equals(
+            (string)($row["password"] ?? ""),
+            (string)$current_password
+        )
+    ) {
+
+        $password_error =
+            "Current password is incorrect.";
+
+    }
 
 
-        $stmt->close();
+    elseif (
+        strlen(
+            $new_password
+        ) < 6
+    ) {
+
+        $password_error =
+            "New password must be at least 6 characters.";
+
+    }
 
 
-        if (
-            !$row
+    elseif (
+        $new_password !==
+        $confirm_password
+    ) {
+
+        $password_error =
+            "New passwords do not match.";
+
+    }
+
+
+    else {
+
+        try {
+
+            fb_update(
+                "residents",
+                $resident_id,
+                [
+                    "password" =>
+                        $new_password,
+                    "updated_at" =>
+                        date("Y-m-d H:i:s")
+                ]
+            );
+
+
+            $password_success =
+                "Password changed successfully.";
+
+        }
+        catch (
+            Throwable $exception
         ) {
 
             $password_error =
-                "Resident account could not be found.";
-
-        }
-
-
-        elseif (
-            !password_verify(
-                $current_password,
-                $row["password"]
-            )
-        ) {
-
-            $password_error =
-                "Current password is incorrect.";
-
-        }
-
-
-        elseif (
-            strlen(
-                $new_password
-            ) < 6
-        ) {
-
-            $password_error =
-                "New password must be at least 6 characters.";
-
-        }
-
-
-        elseif (
-            $new_password !==
-            $confirm_password
-        ) {
-
-            $password_error =
-                "New passwords do not match.";
-
-        }
-
-
-        else {
-
-            $hashed =
-                password_hash(
-                    $new_password,
-                    PASSWORD_DEFAULT
-                );
-
-
-            $update =
-                $conn->prepare("
-                    UPDATE residents
-                    SET password = ?
-                    WHERE resident_id = ?
-                ");
-
-
-            if (
-                !$update
-            ) {
-
-                $password_error =
-                    "Unable to update password.";
-
-            }
-            else {
-
-                $update->bind_param(
-                    "si",
-                    $hashed,
-                    $resident_id
-                );
-
-
-                if (
-                    $update->execute()
-                ) {
-
-                    $password_success =
-                        "Password changed successfully.";
-
-                }
-                else {
-
-                    $password_error =
-                        "Unable to update password.";
-
-                }
-
-
-                $update->close();
-
-            }
+                "Unable to update password.";
 
         }
 
@@ -1892,7 +1515,6 @@ if (
 
 $resident =
     get_profile_resident(
-        $conn,
         $resident_id
     );
 
@@ -1905,7 +1527,6 @@ $resident =
 
 $children =
     get_profile_children(
-        $conn,
         $resident_id
     );
 
@@ -1919,13 +1540,13 @@ $children =
 $resident_initials =
     strtoupper(
         substr(
-            $resident["first_name"],
+            $resident["first_name"] ?? "",
             0,
             1
         )
         .
         substr(
-            $resident["last_name"],
+            $resident["last_name"] ?? "",
             0,
             1
         )
@@ -1934,7 +1555,7 @@ $resident_initials =
 
 $photo_url =
     resident_photo_url(
-        $resident["photo"]
+        $resident["photo"] ?? ""
     );
 
 
@@ -1948,8 +1569,8 @@ $civil_statuses = [
 
 ];
 
-?>
-<!DOCTYPE html>
+
+?><!DOCTYPE html>
 <html lang="en">
 
 <head>

@@ -4,39 +4,18 @@ require_staff_login();
 
 // Reset a resident's password back to their resident number.
 if (isset($_GET["reset_password"])) {
-    $resident_id = (int)$_GET["reset_password"];
+    $resident_id = (string)(int)$_GET["reset_password"];
 
-    $stmt = $conn->prepare("
-        SELECT resident_number
-        FROM residents
-        WHERE resident_id = ?
-    ");
+    fb_page(function () use ($resident_id) {
+        $resident = fb_get("residents/" . $resident_id);
 
-    $stmt->bind_param("i", $resident_id);
-    $stmt->execute();
-
-    $row = $stmt->get_result()->fetch_assoc();
-
-    if ($row) {
-        $hashed = password_hash(
-            $row["resident_number"],
-            PASSWORD_DEFAULT
-        );
-
-        $update = $conn->prepare("
-            UPDATE residents
-            SET password = ?, is_first_login = 1
-            WHERE resident_id = ?
-        ");
-
-        $update->bind_param(
-            "si",
-            $hashed,
-            $resident_id
-        );
-
-        $update->execute();
-    }
+        if (is_array($resident)) {
+            fb_update("residents", $resident_id, array(
+                "password"       => (string)($resident["resident_number"] ?? ""),
+                "is_first_login" => 1,
+            ));
+        }
+    });
 
     redirect("resident_management.php?reset=1");
 }
@@ -46,16 +25,11 @@ if (isset($_GET["reset_password"])) {
 // update history) but hide them from the active list and block
 // portal login, instead of deleting anything.
 if (isset($_GET["archive"])) {
-    $resident_id = (int)$_GET["archive"];
+    $resident_id = (string)(int)$_GET["archive"];
 
-    $stmt = $conn->prepare("
-        UPDATE residents
-        SET status = 'archived'
-        WHERE resident_id = ?
-    ");
-
-    $stmt->bind_param("i", $resident_id);
-    $stmt->execute();
+    fb_page(function () use ($resident_id) {
+        fb_update("residents", $resident_id, array("status" => "archived"));
+    });
 
     redirect("resident_management.php?archived=1");
 }
@@ -63,16 +37,11 @@ if (isset($_GET["archive"])) {
 
 // Restore a previously archived resident back to active status.
 if (isset($_GET["restore"])) {
-    $resident_id = (int)$_GET["restore"];
+    $resident_id = (string)(int)$_GET["restore"];
 
-    $stmt = $conn->prepare("
-        UPDATE residents
-        SET status = 'active'
-        WHERE resident_id = ?
-    ");
-
-    $stmt->bind_param("i", $resident_id);
-    $stmt->execute();
+    fb_page(function () use ($resident_id) {
+        fb_update("residents", $resident_id, array("status" => "active"));
+    });
 
     redirect("resident_management.php?view=archived&restored=1");
 }
@@ -90,67 +59,36 @@ $view = (isset($_GET["view"]) && $_GET["view"] === "archived")
 $status_filter = $view === "archived" ? "archived" : "active";
 
 
-if ($search !== "") {
+fb_page(function () use ($status_filter, $search, &$residents) {
 
-    $like = "%" . $search . "%";
+    $residents = array();
 
-    $stmt = $conn->prepare("
-        SELECT
-            resident_id,
-            resident_number,
-            first_name,
-            middle_name,
-            last_name,
-            extension_name,
-            email,
-            contact_number,
-            updated_at
-        FROM residents
-        WHERE
-            status = ?
-            AND (
-                resident_number LIKE ?
-                OR first_name LIKE ?
-                OR last_name LIKE ?
-            )
-        ORDER BY last_name
-    ");
+    foreach (fb_rows("residents") as $resident) {
 
-    $stmt->bind_param(
-        "ssss",
-        $status_filter,
-        $like,
-        $like,
-        $like
-    );
+        if (($resident["status"] ?? "") !== $status_filter) {
+            continue;
+        }
 
-    $stmt->execute();
+        // The old query searched resident_number, first_name and last_name
+        // with LIKE '%term%'. MySQL's default collation made that
+        // case-insensitive, so stripos() is the matching behaviour.
+        if ($search !== "") {
+            $hit = stripos((string)($resident["resident_number"] ?? ""), $search) !== false
+                || stripos((string)($resident["first_name"] ?? ""), $search) !== false
+                || stripos((string)($resident["last_name"] ?? ""), $search) !== false;
 
-    $residents = $stmt->get_result();
+            if (!$hit) {
+                continue;
+            }
+        }
 
-} else {
+        $resident["resident_id"] = $resident["id"];
+        $residents[] = $resident;
+    }
 
-    $stmt = $conn->prepare("
-        SELECT
-            resident_id,
-            resident_number,
-            first_name,
-            middle_name,
-            last_name,
-            extension_name,
-            email,
-            contact_number,
-            updated_at
-        FROM residents
-        WHERE status = ?
-        ORDER BY last_name
-    ");
-
-    $stmt->bind_param("s", $status_filter);
-    $stmt->execute();
-
-    $residents = $stmt->get_result();
-}
+    // The old query ended with ORDER BY last_name.
+    $residents = fb_sort($residents, "last_name");
+});
 
 ?>
 <!DOCTYPE html>
@@ -633,10 +571,7 @@ REGISTERED RESIDENTS HEADER
 </tr>
 
 
-<?php while (
-    $r =
-    $residents->fetch_assoc()
-): ?>
+<?php foreach ($residents as $r): ?>
 
 
 <tr>
@@ -801,7 +736,7 @@ REGISTERED RESIDENTS HEADER
 </tr>
 
 
-<?php endwhile; ?>
+<?php endforeach; ?>
 
 
 </table>

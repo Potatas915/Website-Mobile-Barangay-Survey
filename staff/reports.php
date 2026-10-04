@@ -10,31 +10,36 @@ require_staff_login();
 |--------------------------------------------------------------------------
 */
 
-$reports = $conn->query("
-    SELECT
-        s.survey_id,
-        s.title,
-        s.start_date,
-        s.end_date,
-        s.status,
+fb_page(function () use (&$reports) {
 
-        (
-            SELECT COUNT(*)
-            FROM responses r
-            WHERE r.survey_id = s.survey_id
-        ) AS response_count,
+    $response_counts = [];
+    foreach (fb_rows("responses") as $response) {
+        $survey_id = (string) ($response["survey_id"] ?? "");
+        $response_counts[$survey_id] = ($response_counts[$survey_id] ?? 0) + 1;
+    }
 
-        (
-            SELECT COUNT(*)
-            FROM survey_questions q
-            WHERE q.survey_id = s.survey_id
-        ) AS question_count
+    $reports = [];
+    foreach (fb_rows("surveys") as $survey) {
 
-    FROM surveys s
+        $questions = $survey["questions"] ?? [];
 
-    ORDER BY
-        s.created_at DESC
-");
+        $reports[] = array(
+            "survey_id"      => $survey["id"],
+            "title"          => $survey["title"] ?? "",
+            "start_date"     => $survey["start_date"] ?? "",
+            "end_date"       => $survey["end_date"] ?? "",
+            "status"         => $survey["status"] ?? "",
+            "response_count" => $response_counts[(string) $survey["id"]] ?? 0,
+            "question_count" => is_array($questions) ? count($questions) : 0,
+            "created_at"     => $survey["created_at"] ?? "",
+        );
+    }
+
+    // ORDER BY created_at DESC
+    usort($reports, function ($a, $b) {
+        return strcmp($b["created_at"], $a["created_at"]);
+    });
+});
 
 
 /*
@@ -155,188 +160,137 @@ if (
 }
 
 
+
+
 /*
 |--------------------------------------------------------------------------
-| Build Resident WHERE Clause
+| Filtered Residents
 |--------------------------------------------------------------------------
+|
+| The old WHERE clause was shared by every report below, so the filters are
+| applied once here and each report then works off the same row set.
+|
+| MySQL compared text with a case-insensitive collation, so the string
+| filters keep matching case-insensitively. An age the resident never gave
+| used to be NULL and belonged to no age group; the export writes those as
+| "", which is treated the same way here.
+|
 */
 
-$where = [
-    "1 = 1"
+$age_group_bounds = [
+    "0-17"  => [0, 17],
+    "18-30" => [18, 30],
+    "31-45" => [31, 45],
+    "46-60" => [46, 60],
+    "61+"   => [61, PHP_INT_MAX]
 ];
 
-$params = [];
 
-$types = "";
-
-
-/*
-|--------------------------------------------------------------------------
-| Civil Status
-|--------------------------------------------------------------------------
-*/
-
-if (
-    $civil_status_filter !== ""
-) {
-
-    $where[] =
-        "civil_status = ?";
-
-    $params[] =
-        $civil_status_filter;
-
-    $types .= "s";
+function resident_report_age($row)
+{
+    $age = trim((string) ($row["age"] ?? ""));
+    if ($age === "" || !is_numeric($age)) {
+        return null;
+    }
+    return (int) $age;
 }
 
 
-/*
-|--------------------------------------------------------------------------
-| Gender
-|--------------------------------------------------------------------------
-*/
-
-if (
-    $gender_filter !== ""
+fb_page(function () use (
+    $civil_status_filter,
+    $gender_filter,
+    $occupation_filter,
+    $age_group_filter,
+    $age_group_bounds,
+    &$filtered_residents
 ) {
 
-    $where[] =
-        "gender = ?";
+    $filtered_residents = [];
 
-    $params[] =
-        $gender_filter;
+    foreach (fb_rows("residents") as $resident) {
 
-    $types .= "s";
-}
+        $text_filters = [
+            "civil_status" => $civil_status_filter,
+            "gender"       => $gender_filter,
+            "occupation"   => $occupation_filter
+        ];
 
+        foreach ($text_filters as $field => $wanted) {
 
-/*
-|--------------------------------------------------------------------------
-| Age Group
-|--------------------------------------------------------------------------
-*/
+            if ($wanted === "") {
+                continue;
+            }
 
-if (
-    $age_group_filter !== ""
-) {
+            if (strcasecmp(
+                trim((string) ($resident[$field] ?? "")),
+                $wanted
+            ) !== 0) {
 
-    switch ($age_group_filter) {
+                continue 2;
+            }
+        }
 
-        case "0-17":
+        if ($age_group_filter !== "") {
 
-            $where[] =
-                "age BETWEEN 0 AND 17";
+            $age = resident_report_age($resident);
 
-            break;
+            if ($age === null) {
+                continue;
+            }
 
+            list($low, $high) = $age_group_bounds[$age_group_filter];
 
-        case "18-30":
+            if ($age < $low || $age > $high) {
+                continue;
+            }
+        }
 
-            $where[] =
-                "age BETWEEN 18 AND 30";
-
-            break;
-
-
-        case "31-45":
-
-            $where[] =
-                "age BETWEEN 31 AND 45";
-
-            break;
-
-
-        case "46-60":
-
-            $where[] =
-                "age BETWEEN 46 AND 60";
-
-            break;
-
-
-        case "61+":
-
-            $where[] =
-                "age >= 61";
-
-            break;
+        $filtered_residents[] = $resident;
     }
-}
+});
 
 
 /*
 |--------------------------------------------------------------------------
-| Occupation
+| Group And Count
 |--------------------------------------------------------------------------
+|
+| Replaces the GROUP BY ... ORDER BY total DESC queries. $limit mirrors the
+| LIMIT 10 that only some of the distributions carried.
+|
 */
 
-if (
-    $occupation_filter !== ""
-) {
+function resident_report_group(array $rows, $field, $limit = null)
+{
+    $counts = [];
 
-    $where[] =
-        "occupation = ?";
+    foreach ($rows as $row) {
 
-    $params[] =
-        $occupation_filter;
+        $label = trim((string) ($row[$field] ?? ""));
 
-    $types .= "s";
-}
+        if ($label === "") {
+            $label = "Not provided";
+        }
 
+        if (!isset($counts[$label])) {
+            $counts[$label] = ["label" => $label, "total" => 0];
+        }
 
-$where_sql =
-    implode(
-        " AND ",
-        $where
-    );
-
-
-/*
-|--------------------------------------------------------------------------
-| Prepared Resident Report Query
-|--------------------------------------------------------------------------
-*/
-
-function resident_report_query(
-    $conn,
-    $sql,
-    $types = "",
-    $params = []
-) {
-
-    $stmt =
-        $conn->prepare(
-            $sql
-        );
-
-
-    if (!$stmt) {
-
-        die("Unable to prepare resident report.");
+        $counts[$label]["total"]++;
     }
 
+    $data = array_values($counts);
 
-    if (
-        $types !== "" &&
-        count($params) > 0
-    ) {
+    usort($data, function ($a, $b) {
+        return $b["total"] <=> $a["total"]
+            ?: strcmp($a["label"], $b["label"]);
+    });
 
-        $stmt->bind_param(
-            $types,
-            ...$params
-        );
+    if ($limit !== null && count($data) > $limit) {
+        $data = array_slice($data, 0, $limit);
     }
 
-
-    if (
-        !$stmt->execute()
-    ) {
-
-        die("Unable to load resident report.");
-    }
-
-
-    return $stmt->get_result();
+    return $data;
 }
 
 
@@ -346,32 +300,7 @@ function resident_report_query(
 |--------------------------------------------------------------------------
 */
 
-$total_result =
-    resident_report_query(
-        $conn,
-
-        "
-            SELECT
-                COUNT(*) AS total
-
-            FROM residents
-
-            WHERE $where_sql
-        ",
-
-        $types,
-        $params
-    );
-
-
-$total_row =
-    $total_result->fetch_assoc();
-
-
-$total_residents =
-    (int) (
-        $total_row["total"] ?? 0
-    );
+$total_residents = count($filtered_residents);
 
 
 /*
@@ -380,110 +309,31 @@ $total_residents =
 |--------------------------------------------------------------------------
 */
 
-$age_result =
-    resident_report_query(
-        $conn,
+$age_0_17 = 0;
+$age_18_30 = 0;
+$age_31_45 = 0;
+$age_46_60 = 0;
+$age_61_plus = 0;
+$age_not_provided = 0;
 
-        "
-            SELECT
+foreach ($filtered_residents as $resident) {
 
-                SUM(
-                    CASE
-                        WHEN age BETWEEN 0 AND 17
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS age_0_17,
+    $age = resident_report_age($resident);
 
-                SUM(
-                    CASE
-                        WHEN age BETWEEN 18 AND 30
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS age_18_30,
-
-                SUM(
-                    CASE
-                        WHEN age BETWEEN 31 AND 45
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS age_31_45,
-
-                SUM(
-                    CASE
-                        WHEN age BETWEEN 46 AND 60
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS age_46_60,
-
-                SUM(
-                    CASE
-                        WHEN age >= 61
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS age_61_plus,
-
-                SUM(
-                    CASE
-                        WHEN age IS NULL
-                        OR age = ''
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS age_not_provided
-
-            FROM residents
-
-            WHERE $where_sql
-        ",
-
-        $types,
-        $params
-    );
-
-
-$age_data =
-    $age_result->fetch_assoc();
-
-
-$age_0_17 =
-    (int) (
-        $age_data["age_0_17"] ?? 0
-    );
-
-
-$age_18_30 =
-    (int) (
-        $age_data["age_18_30"] ?? 0
-    );
-
-
-$age_31_45 =
-    (int) (
-        $age_data["age_31_45"] ?? 0
-    );
-
-
-$age_46_60 =
-    (int) (
-        $age_data["age_46_60"] ?? 0
-    );
-
-
-$age_61_plus =
-    (int) (
-        $age_data["age_61_plus"] ?? 0
-    );
-
-
-$age_not_provided =
-    (int) (
-        $age_data["age_not_provided"] ?? 0
-    );
+    if ($age === null) {
+        $age_not_provided++;
+    } elseif ($age <= 17) {
+        $age_0_17++;
+    } elseif ($age <= 30) {
+        $age_18_30++;
+    } elseif ($age <= 45) {
+        $age_31_45++;
+    } elseif ($age <= 60) {
+        $age_46_60++;
+    } else {
+        $age_61_plus++;
+    }
+}
 
 
 /*
@@ -492,66 +342,7 @@ $age_not_provided =
 |--------------------------------------------------------------------------
 */
 
-$civil_result =
-    resident_report_query(
-        $conn,
-
-        "
-            SELECT
-                civil_status,
-                COUNT(*) AS total
-
-            FROM residents
-
-            WHERE $where_sql
-
-            GROUP BY
-                civil_status
-
-            ORDER BY
-                total DESC
-        ",
-
-        $types,
-        $params
-    );
-
-
-$civil_data = [];
-
-
-while (
-    $row =
-    $civil_result->fetch_assoc()
-) {
-
-    $status =
-        trim(
-            (string) (
-                $row["civil_status"] ?? ""
-            )
-        );
-
-
-    if (
-        $status === ""
-    ) {
-
-        $status =
-            "Not provided";
-    }
-
-
-    $civil_data[] = [
-
-        "label" =>
-        $status,
-
-        "total" =>
-        (int) $row["total"]
-
-    ];
-}
+$civil_data = resident_report_group($filtered_residents, "civil_status");
 
 
 /*
@@ -560,68 +351,7 @@ while (
 |--------------------------------------------------------------------------
 */
 
-$occupation_result =
-    resident_report_query(
-        $conn,
-
-        "
-            SELECT
-                occupation,
-                COUNT(*) AS total
-
-            FROM residents
-
-            WHERE $where_sql
-
-            GROUP BY
-                occupation
-
-            ORDER BY
-                total DESC
-
-            LIMIT 10
-        ",
-
-        $types,
-        $params
-    );
-
-
-$occupation_data = [];
-
-
-while (
-    $row =
-    $occupation_result->fetch_assoc()
-) {
-
-    $occupation =
-        trim(
-            (string) (
-                $row["occupation"] ?? ""
-            )
-        );
-
-
-    if (
-        $occupation === ""
-    ) {
-
-        $occupation =
-            "Not provided";
-    }
-
-
-    $occupation_data[] = [
-
-        "label" =>
-        $occupation,
-
-        "total" =>
-        (int) $row["total"]
-
-    ];
-}
+$occupation_data = resident_report_group($filtered_residents, "occupation", 10);
 
 
 /*
@@ -630,68 +360,7 @@ while (
 |--------------------------------------------------------------------------
 */
 
-$employer_result =
-    resident_report_query(
-        $conn,
-
-        "
-            SELECT
-                employer,
-                COUNT(*) AS total
-
-            FROM residents
-
-            WHERE $where_sql
-
-            GROUP BY
-                employer
-
-            ORDER BY
-                total DESC
-
-            LIMIT 10
-        ",
-
-        $types,
-        $params
-    );
-
-
-$employer_data = [];
-
-
-while (
-    $row =
-    $employer_result->fetch_assoc()
-) {
-
-    $employer =
-        trim(
-            (string) (
-                $row["employer"] ?? ""
-            )
-        );
-
-
-    if (
-        $employer === ""
-    ) {
-
-        $employer =
-            "Not provided";
-    }
-
-
-    $employer_data[] = [
-
-        "label" =>
-        $employer,
-
-        "total" =>
-        (int) $row["total"]
-
-    ];
-}
+$employer_data = resident_report_group($filtered_residents, "employer", 10);
 
 
 /*
@@ -700,68 +369,7 @@ while (
 |--------------------------------------------------------------------------
 */
 
-$address_result =
-    resident_report_query(
-        $conn,
-
-        "
-            SELECT
-                address,
-                COUNT(*) AS total
-
-            FROM residents
-
-            WHERE $where_sql
-
-            GROUP BY
-                address
-
-            ORDER BY
-                total DESC
-
-            LIMIT 10
-        ",
-
-        $types,
-        $params
-    );
-
-
-$address_data = [];
-
-
-while (
-    $row =
-    $address_result->fetch_assoc()
-) {
-
-    $address =
-        trim(
-            (string) (
-                $row["address"] ?? ""
-            )
-        );
-
-
-    if (
-        $address === ""
-    ) {
-
-        $address =
-            "Not provided";
-    }
-
-
-    $address_data[] = [
-
-        "label" =>
-        $address,
-
-        "total" =>
-        (int) $row["total"]
-
-    ];
-}
+$address_data = resident_report_group($filtered_residents, "address", 10);
 
 
 /*
@@ -770,115 +378,35 @@ while (
 |--------------------------------------------------------------------------
 */
 
-$summary_result =
-    resident_report_query(
-        $conn,
+$summary_fields = [
+    "with_birthday"   => "birthday",
+    "with_occupation" => "occupation",
+    "with_employer"   => "employer",
+    "with_email"      => "email",
+    "with_contact"    => "contact_number",
+    "with_address"    => "address"
+];
 
-        "
-            SELECT
+$summary = [];
 
-                SUM(
-                    CASE
-                        WHEN birthday IS NOT NULL
-                        AND birthday <> ''
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS with_birthday,
+foreach ($summary_fields as $counter => $field) {
 
-                SUM(
-                    CASE
-                        WHEN occupation IS NOT NULL
-                        AND TRIM(occupation) <> ''
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS with_occupation,
+    $summary[$counter] = 0;
 
-                SUM(
-                    CASE
-                        WHEN employer IS NOT NULL
-                        AND TRIM(employer) <> ''
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS with_employer,
+    foreach ($filtered_residents as $resident) {
 
-                SUM(
-                    CASE
-                        WHEN email IS NOT NULL
-                        AND TRIM(email) <> ''
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS with_email,
+        if (trim((string) ($resident[$field] ?? "")) !== "") {
+            $summary[$counter]++;
+        }
+    }
+}
 
-                SUM(
-                    CASE
-                        WHEN contact_number IS NOT NULL
-                        AND TRIM(contact_number) <> ''
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS with_contact,
-
-                SUM(
-                    CASE
-                        WHEN address IS NOT NULL
-                        AND TRIM(address) <> ''
-                        THEN 1
-                        ELSE 0
-                    END
-                ) AS with_address
-
-            FROM residents
-
-            WHERE $where_sql
-        ",
-
-        $types,
-        $params
-    );
-
-
-$summary_data =
-    $summary_result->fetch_assoc();
-
-
-$with_birthday =
-    (int) (
-        $summary_data["with_birthday"] ?? 0
-    );
-
-
-$with_occupation =
-    (int) (
-        $summary_data["with_occupation"] ?? 0
-    );
-
-
-$with_employer =
-    (int) (
-        $summary_data["with_employer"] ?? 0
-    );
-
-
-$with_email =
-    (int) (
-        $summary_data["with_email"] ?? 0
-    );
-
-
-$with_contact =
-    (int) (
-        $summary_data["with_contact"] ?? 0
-    );
-
-
-$with_address =
-    (int) (
-        $summary_data["with_address"] ?? 0
-    );
+$with_birthday = $summary["with_birthday"];
+$with_occupation = $summary["with_occupation"];
+$with_employer = $summary["with_employer"];
+$with_email = $summary["with_email"];
+$with_contact = $summary["with_contact"];
+$with_address = $summary["with_address"];
 
 
 /*
@@ -887,90 +415,53 @@ $with_address =
 |--------------------------------------------------------------------------
 */
 
-$directory_result =
-    resident_report_query(
-        $conn,
+$directory =
+    $filtered_residents;
 
-        "
-            SELECT
+// ORDER BY last_name ASC, first_name ASC
+usort($directory, function ($a, $b) {
 
-                resident_number,
-
-                first_name,
-
-                middle_name,
-
-                last_name,
-
-                extension_name,
-
-                civil_status,
-
-                birthday,
-
-                age,
-
-                occupation,
-
-                employer,
-
-                email,
-
-                contact_number,
-
-                address
-
-            FROM residents
-
-            WHERE $where_sql
-
-            ORDER BY
-                last_name ASC,
-                first_name ASC
-        ",
-
-        $types,
-        $params
+    $by_last = strcmp(
+        (string) ($a["last_name"] ?? ""),
+        (string) ($b["last_name"] ?? "")
     );
+
+    return
+        $by_last !== 0
+            ? $by_last
+            : strcmp(
+                (string) ($a["first_name"] ?? ""),
+                (string) ($b["first_name"] ?? "")
+            );
+});
 
 
 /*
 |--------------------------------------------------------------------------
 | Occupation Filter Options
 |--------------------------------------------------------------------------
+|
+| This one was never filtered, so it always lists every occupation on file.
+|
 */
 
-$occupation_options_result =
-    resident_report_query(
-        $conn,
+fb_page(function () use (&$occupation_options) {
 
-        "
-            SELECT DISTINCT
-                occupation
+    $occupation_options = [];
 
-            FROM residents
+    foreach (fb_rows("residents") as $resident) {
 
-            WHERE
-                occupation IS NOT NULL
-                AND TRIM(occupation) <> ''
+        $occupation = trim((string) ($resident["occupation"] ?? ""));
 
-            ORDER BY
-                occupation ASC
-        "
-    );
+        if ($occupation !== "") {
+            $occupation_options[$occupation] = $occupation;
+        }
+    }
 
+    $occupation_options = array_values($occupation_options);
 
-$occupation_options = [];
-
-
-while (
-    $occupation_row =
-    $occupation_options_result->fetch_assoc()
-) {
-
-    $occupation_options[] =
-        $occupation_row["occupation"];
-}
+    sort($occupation_options, SORT_STRING);
+});
 
 ?>
 <!DOCTYPE html>
@@ -1829,9 +1320,9 @@ SURVEY SUMMARY REPORT
                     </tr>
 
 
-                    <?php while (
-                        $r =
-                        $reports->fetch_assoc()
+                    <?php foreach (
+                        $reports
+                        as $r
                     ): ?>
 
 
@@ -1902,7 +1393,7 @@ SURVEY SUMMARY REPORT
                         </tr>
 
 
-                    <?php endwhile; ?>
+                    <?php endforeach; ?>
 
 
                 </table>
@@ -3115,14 +2606,13 @@ RESIDENT REPORT
 
 
                             <?php if (
-                                $directory_result &&
-                                $directory_result->num_rows > 0
+                                $directory
                             ): ?>
 
 
-                                <?php while (
-                                    $resident =
-                                    $directory_result->fetch_assoc()
+                                <?php foreach (
+                                    $directory
+                                    as $resident
                                 ): ?>
 
 
@@ -3274,7 +2764,7 @@ RESIDENT REPORT
                                     </tr>
 
 
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
 
 
                             <?php else: ?>

@@ -4,14 +4,25 @@ require_staff_login();
 
 // "Updated" = the record has been saved at least once since it was
 // created (covers both resident self-service edits and staff edits).
-$residents = $conn->query("
-    SELECT resident_id, resident_number, first_name, middle_name, last_name, extension_name,
-           email, contact_number, created_at, updated_at
-    FROM residents
-    WHERE updated_at > created_at
-    ORDER BY updated_at DESC
-");
+fb_page(function () use (&$residents) {
+
+    $residents = array();
+
+    foreach (fb_rows("residents") as $resident) {
+        // The old WHERE clause was updated_at > created_at.
+        if (strcmp((string)($resident["updated_at"] ?? ""), (string)($resident["created_at"] ?? "")) > 0) {
+            $resident["resident_id"] = $resident["id"];
+            $residents[] = $resident;
+        }
+    }
+
+    // The old query ended with ORDER BY updated_at DESC.
+    usort($residents, function ($a, $b) {
+        return strcmp((string)$b["updated_at"], (string)$a["updated_at"]);
+    });
+});
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -37,9 +48,9 @@ $residents = $conn->query("
         <div class="table-scroll">
         <table>
             <tr><th>Resident Number</th><th>Name</th><th>Email</th><th>Contact</th><th>Last Updated</th><th>Actions</th></tr>
-            <?php if ($residents->num_rows === 0): ?>
+            <?php if (!$residents): ?>
             <tr><td colspan="6" style="text-align:center; color:#889;">No resident records have been updated yet.</td></tr>
-            <?php else: while ($r = $residents->fetch_assoc()): ?>
+            <?php else: foreach ($residents as $r): ?>
             <tr>
                 <td><?= e($r["resident_number"]) ?></td>
                 <td><?= e(full_resident_name($r)) ?></td>
@@ -53,7 +64,7 @@ $residents = $conn->query("
                     </div>
                 </td>
             </tr>
-            <?php endwhile; endif; ?>
+            <?php endforeach; endif; ?>
         </table>
         </div>
     </div>

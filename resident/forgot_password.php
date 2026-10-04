@@ -19,23 +19,26 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && ($_POST["action"] ?? "") === "verif
     $resident_number = trim($_POST["resident_number"]);
     $email = trim($_POST["email"]);
 
-    $stmt = $conn->prepare(
-        "SELECT resident_id FROM residents WHERE resident_number = ? AND email = ?"
-    );
-    $stmt->bind_param("ss", $resident_number, $email);
-    $stmt->execute();
-    $result = $stmt->get_result();
+    fb_page(function () use ($resident_number, $email, &$error, &$resident_id, &$step) {
 
-    if ($result->num_rows === 1) {
-        $row = $result->fetch_assoc();
-        $_SESSION["reset_resident_id"] = $row["resident_id"];
-        $resident_id = $row["resident_id"];
-        $step = "reset";
-    } else {
-        $error = "We couldn't match that resident number and email.";
-    }
+        $resident = fb_resident_by_number($resident_number);
 
-    $stmt->close();
+        // MySQL compared email with a case-insensitive collation, so keep
+        // matching that way here.
+
+        if ($resident && strcasecmp((string)($resident["email"] ?? ""), $email) === 0) {
+
+            $_SESSION["reset_resident_id"] = $resident["id"];
+            $resident_id = $resident["id"];
+            $step = "reset";
+
+        } else {
+
+            $error = "We couldn't match that resident number and email.";
+
+        }
+
+    });
 
 } elseif ($_SERVER["REQUEST_METHOD"] === "POST" && ($_POST["action"] ?? "") === "reset") {
 
@@ -54,25 +57,29 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && ($_POST["action"] ?? "") === "verif
         $step = "reset";
     } else {
 
-        $stmt = $conn->prepare("SELECT password FROM residents WHERE resident_id = ?");
-        $stmt->bind_param("i", $resident_id);
-        $stmt->execute();
-        $current = $stmt->get_result()->fetch_assoc();
-        $stmt->close();
+        fb_page(function () use ($new_password, $resident_id, &$error, &$step) {
 
-        if ($current && password_verify($new_password, $current["password"])) {
+        $resident = fb_get("residents/" . $resident_id);
+
+        if (is_array($resident)
+            && hash_equals((string)($resident["password"] ?? ""), (string)$new_password)) {
+
             $error = "That's your current password. Please choose a different one.";
             $step = "reset";
-        } else {
-            $hashed = password_hash($new_password, PASSWORD_DEFAULT);
-            $stmt = $conn->prepare("UPDATE residents SET password = ?, is_first_login = 0 WHERE resident_id = ?");
-            $stmt->bind_param("si", $hashed, $resident_id);
-            $stmt->execute();
-            $stmt->close();
 
-            unset($_SESSION["reset_resident_id"]);
-            redirect("login.php?reset=1");
+            return;
+
         }
+
+        fb_update("residents", $resident_id, array(
+            "password"       => $new_password,
+            "is_first_login" => 0,
+        ));
+
+        unset($_SESSION["reset_resident_id"]);
+        redirect("login.php?reset=1");
+
+    });
     }
 }
 ?>

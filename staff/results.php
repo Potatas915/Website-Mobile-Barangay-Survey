@@ -2,8 +2,19 @@
 require_once __DIR__ . "/../includes/functions.php";
 require_staff_login();
 
-$surveys = $conn->query("SELECT survey_id, title FROM surveys ORDER BY created_at DESC");
-$survey_list = $surveys->fetch_all(MYSQLI_ASSOC);
+fb_page(function () use (&$survey_list) {
+
+    $survey_list = array();
+    foreach (fb_rows("surveys") as $survey) {
+        $survey["survey_id"] = $survey["id"];
+        $survey_list[] = $survey;
+    }
+
+    // The old query ended with ORDER BY created_at DESC.
+    usort($survey_list, function ($a, $b) {
+        return strcmp((string)$b["created_at"], (string)$a["created_at"]);
+    });
+});
 
 $selected_id = isset($_GET["survey_id"]) ? (int)$_GET["survey_id"] : (count($survey_list) ? $survey_list[0]["survey_id"] : 0);
 $selected_title = "Survey Results";
@@ -19,56 +30,103 @@ $response_count = 0;
 $respondents = [];
 
 if ($selected_id) {
-    $rc_stmt = $conn->prepare("SELECT COUNT(*) AS c FROM responses WHERE survey_id = ?");
-    $rc_stmt->bind_param("i", $selected_id);
-    $rc_stmt->execute();
-    $response_count = $rc_stmt->get_result()->fetch_assoc()["c"];
+    fb_page(function () use ($selected_id, &$questions, &$response_count, &$respondents) {
 
-    $q_stmt = $conn->prepare("SELECT question_id, question_text, question_type FROM survey_questions WHERE survey_id = ? ORDER BY question_order");
-    $q_stmt->bind_param("i", $selected_id);
-    $q_stmt->execute();
-    $questions = $q_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-
-    foreach ($questions as &$q) {
-        if ($q["question_type"] === "short_answer") {
-            $a_stmt = $conn->prepare("
-                SELECT sr.answer_text, r.resident_name
-                FROM survey_results sr
-                JOIN responses r ON r.response_id = sr.response_id
-                WHERE sr.question_id = ? AND sr.answer_text IS NOT NULL
-            ");
-            $a_stmt->bind_param("i", $q["question_id"]);
-            $a_stmt->execute();
-            $q["answers"] = $a_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-        } else {
-            $c_stmt = $conn->prepare("
-                SELECT sc.choice_text, COUNT(sr.result_id) AS votes
-                FROM survey_choices sc
-                LEFT JOIN survey_results sr ON sr.choice_id = sc.choice_id
-                WHERE sc.question_id = ?
-                GROUP BY sc.choice_id
-                ORDER BY sc.choice_order
-            ");
-            $c_stmt->bind_param("i", $q["question_id"]);
-            $c_stmt->execute();
-            $q["choice_stats"] = $c_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-            $q["total_votes"] = array_sum(array_column($q["choice_stats"], "votes"));
+        // Every response for this survey, read once and reused for the count,
+        // the vote tallies and the respondent list.
+        $responses = array();
+        foreach (fb_rows("responses") as $response) {
+            if ((string)($response["survey_id"] ?? "") === (string)$selected_id) {
+                $responses[] = $response;
+            }
         }
-    }
-    unset($q);
+        $response_count = count($responses);
 
-    $resp_stmt = $conn->prepare("
-        SELECT r.resident_id, r.resident_name, res.resident_number, res.email, r.submitted_at
-        FROM responses r
-        JOIN residents res ON res.resident_id = r.resident_id
-        WHERE r.survey_id = ?
-        ORDER BY r.submitted_at DESC
-    ");
-    $resp_stmt->bind_param("i", $selected_id);
-    $resp_stmt->execute();
-    $respondents = $resp_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $questions = [];
+        foreach (fb_rows("surveys/" . $selected_id . "/questions") as $qid => $question) {
+            $question["question_id"] = (string)$qid;
+
+            $votes = array();
+            $answers = array();
+
+            foreach ($responses as $response) {
+                $answer = $response["answers"][$qid] ?? null;
+                if (!is_array($answer)) {
+                    continue;
+                }
+
+                $choice_id = (string)($answer["choice_id"] ?? "");
+                if ($choice_id !== "") {
+                    $votes[$choice_id] = ($votes[$choice_id] ?? 0) + 1;
+                }
+
+                $answer_text = (string)($answer["answer_text"] ?? "");
+                if ($answer_text !== "") {
+                    $answers[] = array(
+                        "answer_text"  => $answer_text,
+                        "resident_name" => $response["resident_name"] ?? "",
+                    );
+                }
+            }
+
+            if (($question["question_type"] ?? "") === "short_answer") {
+                // The old query kept rows where answer_text IS NOT NULL, which
+                // is the same as keeping the non-empty ones.
+                $question["answers"] = $answers;
+            } else {
+
+                // LEFT JOIN survey_choices, so every choice is listed even
+                // when nobody picked it.
+                $choice_stats = array();
+                foreach (fb_rows("surveys/" . $selected_id . "/questions/" . $qid . "/choices") as $cid => $choice) {
+                    $choice_stats[] = array(
+                        "choice_text"   => $choice["choice_text"] ?? "",
+                        "choice_order"  => $choice["choice_order"] ?? 0,
+                        "votes"         => $votes[(string)$cid] ?? 0,
+                    );
+                }
+
+                usort($choice_stats, function ($a, $b) {
+                    return (int)$a["choice_order"] <=> (int)$b["choice_order"];
+                });
+
+                $question["choice_stats"] = $choice_stats;
+                $question["total_votes"] = array_sum(array_column($choice_stats, "votes"));
+            }
+
+            $questions[] = $question;
+        }
+
+        // ORDER BY question_order
+        usort($questions, function ($a, $b) {
+            return (int)$a["question_order"] <=> (int)$b["question_order"];
+        });
+
+        // The resident_number and email columns came from a JOIN on
+        // residents, so they are looked up here.
+        $respondents = array();
+        foreach ($responses as $response) {
+            $resident_id = (string)($response["resident_id"] ?? "");
+            $resident = $resident_id === "" ? null : fb_get("residents/" . $resident_id);
+
+            $respondents[] = array(
+                "response_id"     => $response["id"],
+                "resident_id"     => $resident_id,
+                "resident_name"   => $response["resident_name"] ?? "",
+                "resident_number" => is_array($resident) ? ($resident["resident_number"] ?? "") : "",
+                "email"           => is_array($resident) ? ($resident["email"] ?? "") : "",
+                "submitted_at"    => $response["submitted_at"] ?? "",
+            );
+        }
+
+        // The old query ended with ORDER BY submitted_at DESC.
+        usort($respondents, function ($a, $b) {
+            return strcmp((string)$b["submitted_at"], (string)$a["submitted_at"]);
+        });
+    });
 }
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>

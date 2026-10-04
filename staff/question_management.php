@@ -2,30 +2,28 @@
 require_once __DIR__ . "/../includes/functions.php";
 require_staff_login();
 
-$survey_id = isset($_GET["survey_id"]) ? (int)$_GET["survey_id"] : ((int)($_POST["survey_id"] ?? 0));
+$survey_id = (int)(isset($_GET["survey_id"]) ? $_GET["survey_id"] : (isset($_POST["survey_id"]) ? $_POST["survey_id"] : 0));
 
 // A survey's questions can only be changed while it has zero responses,
 // so past results always stay consistent with what was actually asked.
-$check_responses = $conn->prepare("SELECT COUNT(*) as count FROM responses WHERE survey_id = ?");
-$check_responses->bind_param("i", $survey_id);
-$check_responses->execute();
-$response_data = $check_responses->get_result()->fetch_assoc();
-$is_locked = $response_data["count"] > 0;
+$response_count = 0;
+foreach (fb_rows("responses") as $response) {
+    if ((string)($response["survey_id"] ?? "") === (string)$survey_id) {
+        $response_count++;
+    }
+}
+$is_locked = $response_count > 0;
 
 if ($is_locked) {
     die("Error: You cannot edit questions for a survey that already has responses.");
 }
 
-$survey_stmt = $conn->prepare("SELECT title FROM surveys WHERE survey_id = ?");
-$survey_stmt->bind_param("i", $survey_id);
-$survey_stmt->execute();
-$survey = $survey_stmt->get_result()->fetch_assoc();
-if (!$survey) redirect("survey_management.php");
+$survey = fb_get("surveys/" . $survey_id);
+if (!is_array($survey)) redirect("survey_management.php");
 
 $error = "";
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-    $question_ids = $_POST["question_id"] ?? [];
     $questions_text = $_POST["question_text"] ?? [];
     $questions_type = $_POST["question_type"] ?? [];
     $questions_required = $_POST["question_required"] ?? [];
@@ -36,111 +34,129 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     if (count($questions_text) === 0) {
         $error = "Please add at least one question.";
     } else {
-        $conn->begin_transaction();
-        try {
-            $q_insert = $conn->prepare("INSERT INTO survey_questions (survey_id, question_text, question_type, is_required, question_order) VALUES (?, ?, ?, ?, ?)");
-            $q_update = $conn->prepare("UPDATE survey_questions SET question_text = ?, question_type = ?, is_required = ?, question_order = ? WHERE question_id = ? AND survey_id = ?");
-            $c_delete = $conn->prepare("DELETE FROM survey_choices WHERE question_id = ?");
-            $c_insert = $conn->prepare("INSERT INTO survey_choices (question_id, choice_text, choice_order) VALUES (?, ?, ?)");
 
-            $keep_ids = [];
-            $order = 0;
+        // The old code wrapped this in a transaction because it inserted and
+        // deleted questions one row at a time. Firebase writes the whole
+        // questions subtree in a single PUT instead, so the survey is either
+        // fully updated or not updated at all - no half-saved state.
+        $payload = array();
+        $order = 0;
 
-            foreach ($questions_text as $index => $qtext) {
-                $qtext = trim($qtext);
-                if ($qtext === "") continue;
+        foreach ($questions_text as $index => $qtext) {
+            $qtext = trim($qtext);
+            if ($qtext === "") continue;
 
-                $qtype = $questions_type[$index] ?? "";
-                if (!in_array($qtype, $valid_types, true)) continue;
+            $qtype = $questions_type[$index] ?? "";
+            if (!in_array($qtype, $valid_types, true)) continue;
 
-                $required = isset($questions_required[$index]) ? 1 : 0;
-                $order++;
-                $qid = isset($question_ids[$index]) ? (int)$question_ids[$index] : 0;
+            // An unchecked checkbox is simply not posted, but anything that can
+            // post this form may send an explicit 0, so check the value.
+            $required = !empty($questions_required[$index]) && $questions_required[$index] !== "0" ? 1 : 0;
+            $order++;
 
-                if ($qid > 0) {
-                    // Editing an existing question
-                    $q_update->bind_param("ssiiii", $qtext, $qtype, $required, $order, $qid, $survey_id);
-                    $q_update->execute();
-                    $question_id = $qid;
+            // Question ids are numbered per survey, and this page is only
+            // reachable while the survey has no responses, so nothing outside
+            // this subtree can be holding on to the old ids.
+            $question_id = (string)$order;
 
-                    $c_delete->bind_param("i", $question_id);
-                    $c_delete->execute();
-                } else {
-                    // Adding a brand new question
-                    $q_insert->bind_param("issii", $survey_id, $qtext, $qtype, $required, $order);
-                    $q_insert->execute();
-                    $question_id = $conn->insert_id;
+            $row = array(
+                "question_id"    => $question_id,
+                "survey_id"      => (string)$survey_id,
+                "question_text"  => $qtext,
+                "question_type"  => $qtype,
+                "is_required"    => $required,
+                "question_order" => $order,
+            );
+
+            if ($qtype === "yes_no") {
+                $row["choices"] = array();
+                foreach (["Yes", "No"] as $i => $label) {
+                    $row["choices"][(string)($i + 1)] = array(
+                        "choice_id"    => (string)($i + 1),
+                        "question_id"  => $question_id,
+                        "choice_text"  => $label,
+                        "choice_order" => $i + 1,
+                    );
                 }
-
-                $keep_ids[] = $question_id;
-
-                if ($qtype === "yes_no") {
-                    foreach (["Yes", "No"] as $i => $label) {
-                        $order_c = $i + 1;
-                        $c_insert->bind_param("isi", $question_id, $label, $order_c);
-                        $c_insert->execute();
-                    }
-                } elseif ($qtype === "rating") {
-                    $labels = ["1 - Very Dissatisfied", "2 - Dissatisfied", "3 - Neutral", "4 - Satisfied", "5 - Very Satisfied"];
-                    foreach ($labels as $i => $label) {
-                        $order_c = $i + 1;
-                        $c_insert->bind_param("isi", $question_id, $label, $order_c);
-                        $c_insert->execute();
-                    }
-                } elseif ($qtype === "multiple_choice" && isset($choices[$index])) {
-                    $order_c = 0;
-                    foreach ($choices[$index] as $choice_text) {
-                        $choice_text = trim($choice_text);
-                        if ($choice_text === "") continue;
-                        $order_c++;
-                        $c_insert->bind_param("isi", $question_id, $choice_text, $order_c);
-                        $c_insert->execute();
-                    }
+            } elseif ($qtype === "rating") {
+                $labels = ["1 - Very Dissatisfied", "2 - Dissatisfied", "3 - Neutral", "4 - Satisfied", "5 - Very Satisfied"];
+                $row["choices"] = array();
+                foreach ($labels as $i => $label) {
+                    $row["choices"][(string)($i + 1)] = array(
+                        "choice_id"    => (string)($i + 1),
+                        "question_id"  => $question_id,
+                        "choice_text"  => $label,
+                        "choice_order" => $i + 1,
+                    );
+                }
+            } elseif ($qtype === "multiple_choice" && isset($choices[$index])) {
+                $row["choices"] = array();
+                $order_c = 0;
+                foreach ($choices[$index] as $choice_text) {
+                    $choice_text = trim($choice_text);
+                    if ($choice_text === "") continue;
+                    $order_c++;
+                    $row["choices"][(string)$order_c] = array(
+                        "choice_id"    => (string)$order_c,
+                        "question_id"  => $question_id,
+                        "choice_text"  => $choice_text,
+                        "choice_order" => $order_c,
+                    );
                 }
             }
 
-            if (count($keep_ids) === 0) {
-                $error = "Please add at least one question.";
-                $conn->rollback();
-            } else {
-                // Any existing question that was removed in the form (i.e. its
-                // question_id was not resubmitted) gets deleted here. This is
-                // only reachable while the survey has zero responses.
-                $placeholders = implode(",", array_fill(0, count($keep_ids), "?"));
-                $types = str_repeat("i", count($keep_ids));
-                $del_stmt = $conn->prepare("DELETE FROM survey_questions WHERE survey_id = ? AND question_id NOT IN ($placeholders)");
-                $del_stmt->bind_param("i" . $types, $survey_id, ...$keep_ids);
-                $del_stmt->execute();
+            $payload[$question_id] = $row;
+        }
 
-                $conn->commit();
-                redirect("question_management.php?survey_id=" . $survey_id . "&saved=1");
-            }
-        } catch (Exception $e) {
-            $conn->rollback();
-            $error = "Something went wrong while saving the questions. Please try again.";
+        if (count($payload) === 0) {
+            $error = "Please add at least one question.";
+        } else {
+            $question_total = count($payload);
+            fb_page(function () use ($survey_id, $payload, $question_total) {
+
+                // One write replaces the whole subtree. Questions dropped from
+                // the form simply never make it into $payload, which is how the
+                // old "DELETE ... WHERE question_id NOT IN (...)" behaved.
+                fb_set("surveys/" . $survey_id . "/questions", $payload);
+
+                // Keep the global counter ahead of the ids we just used.
+                $counter = (int)fb_get("counters/survey_questions");
+                fb_set("counters/survey_questions", max($counter, $question_total));
+            });
+            redirect("question_management.php?survey_id=" . $survey_id . "&saved=1");
         }
     }
 }
 
-$q_stmt = $conn->prepare("SELECT question_id, question_text, question_type, is_required FROM survey_questions WHERE survey_id = ? ORDER BY question_order");
-$q_stmt->bind_param("i", $survey_id);
-$q_stmt->execute();
-$questions_result = $q_stmt->get_result();
+fb_page(function () use ($survey_id, &$questions) {
 
-$questions = [];
-while ($q = $questions_result->fetch_assoc()) {
-    $q["choices"] = [];
-    if ($q["question_type"] === "multiple_choice") {
-        $c_stmt = $conn->prepare("SELECT choice_text FROM survey_choices WHERE question_id = ? ORDER BY choice_order");
-        $c_stmt->bind_param("i", $q["question_id"]);
-        $c_stmt->execute();
-        $c_res = $c_stmt->get_result();
-        while ($c = $c_res->fetch_assoc()) {
-            $q["choices"][] = $c["choice_text"];
+    $questions = array();
+
+    // ORDER BY question_order
+    $rows = fb_rows("surveys/" . $survey_id . "/questions");
+    uasort($rows, function ($a, $b) {
+        return (int)($a["question_order"] ?? 0) <=> (int)($b["question_order"] ?? 0);
+    });
+
+    foreach ($rows as $qid => $q) {
+        $q["question_id"] = (string)$qid;
+        $q["choices"] = [];
+
+        if (($q["question_type"] ?? "") === "multiple_choice") {
+
+            $choice_rows = fb_rows("surveys/" . $survey_id . "/questions/" . $qid . "/choices");
+            uasort($choice_rows, function ($a, $b) {
+                return (int)($a["choice_order"] ?? 0) <=> (int)($b["choice_order"] ?? 0);
+            });
+
+            foreach ($choice_rows as $choice) {
+                $q["choices"][] = $choice["choice_text"] ?? "";
+            }
         }
+
+        $questions[] = $q;
     }
-    $questions[] = $q;
-}
+});
 
 $type_labels = [
     "multiple_choice" => "Multiple Choice",

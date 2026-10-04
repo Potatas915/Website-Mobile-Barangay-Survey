@@ -7,41 +7,30 @@ $success = "";
 
 // Auto-generate the next resident number in YYYY-NNNN format, based on
 // the highest sequence number already registered for the current year.
-function getNextResidentNumber($conn)
+function getNextResidentNumber()
 {
     $year = date("Y");
-
-    $stmt = $conn->prepare(
-        "SELECT resident_number FROM residents WHERE resident_number LIKE ?"
-    );
-    $like = $year . "-%";
-    $stmt->bind_param("s", $like);
-    $stmt->execute();
-    $result = $stmt->get_result();
-
+    $pattern = "/^" . preg_quote($year, "/") . "-(\d+)$/";
     $max = 0;
-    while ($row = $result->fetch_assoc()) {
-        $number = trim((string) $row["resident_number"]);
-        if (preg_match("/^" . $year . "-(\d+)$/", $number, $m)) {
-            $seq = (int) $m[1];
-            if ($seq > $max) {
-                $max = $seq;
-            }
+
+    // lookup/resident_number holds every number as a key, so the whole year
+    // can be scanned in one read instead of one read per resident.
+    foreach (fb_rows("residents") as $row) {
+        if (preg_match($pattern, trim((string)($row["resident_number"] ?? "")), $m)) {
+            $max = max($max, (int)$m[1]);
         }
     }
 
-    $next = $max + 1;
-    return $year . "-" . str_pad((string) $next, 4, "0", STR_PAD_LEFT);
+    return $year . "-" . str_pad((string)($max + 1), 4, "0", STR_PAD_LEFT);
 }
 
-$suggestedResidentNumber = getNextResidentNumber($conn);
+$suggestedResidentNumber = fb_page(function () { return getNextResidentNumber(); });
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
     // Resident number is auto-generated server-side (not taken from the
     // form) so it can't be edited or spoofed by the client, and so two
     // staff registering at the same time can't collide.
-    $resident_number = getNextResidentNumber($conn);
     $first_name = trim($_POST["first_name"]);
     $last_name = trim($_POST["last_name"]);
     $gender = trim($_POST["gender"] ?? "");
@@ -66,70 +55,54 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     }
     else {
 
-        // Try a few times in case another registration grabbed the same
-        // auto-generated number a split second earlier.
         $inserted = false;
-        $attempts = 0;
 
-        while (!$inserted && $attempts < 5) {
-            $attempts++;
+        fb_page(function () use ($first_name, $last_name, $gender, $email,
+                                 $contact_number, $address,
+                                 &$inserted, &$success, &$error) {
 
-            $check = $conn->prepare(
-                "SELECT resident_id FROM residents WHERE resident_number = ?"
-            );
-            $check->bind_param("s", $resident_number);
-            $check->execute();
+            // Try a few times in case another registration grabbed the same
+            // auto-generated number a split second earlier.
+            $attempts = 0;
 
-            if ($check->get_result()->num_rows > 0) {
-                $resident_number = getNextResidentNumber($conn);
-                continue;
-            }
+            while (!$inserted && $attempts < 5) {
+                $attempts++;
 
-            // Per the resident portal rules, the default password is
-            // always the resident's own Resident Number, and they must
-            // change it the first time they log in.
-            $hashed = password_hash($resident_number, PASSWORD_DEFAULT);
-            $gender_sql = $gender !== "" ? $gender : null;
+                $resident_number = getNextResidentNumber();
 
-            $stmt = $conn->prepare("
-                INSERT INTO residents
-                (
-                    resident_number,
-                    first_name,
-                    last_name,
-                    gender,
-                    email,
-                    contact_number,
-                    address,
-                    password,
-                    is_first_login
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-            ");
+                if (fb_index_find("resident_number", $resident_number) !== null) {
+                    continue;
+                }
 
-            $stmt->bind_param(
-                "ssssssss",
-                $resident_number,
-                $first_name,
-                $last_name,
-                $gender_sql,
-                $email,
-                $contact_number,
-                $address,
-                $hashed
-            );
+                // Per the resident portal rules, the default password is
+                // always the resident's own Resident Number, and they must
+                // change it the first time they log in. Passwords are stored
+                // in plain text, so the number is written as-is.
+                fb_insert_resident(blank_resident_row(array(
+                    "resident_number" => $resident_number,
+                    "first_name"      => $first_name,
+                    "last_name"       => $last_name,
+                    "gender"          => $gender,
+                    "email"           => $email,
+                    "contact_number"  => $contact_number,
+                    "address"         => $address,
+                    "password"        => $resident_number,
+                    "is_first_login"  => 1,
+                    "mobile_pin"      => $resident_number,
+                )));
 
-            if ($stmt->execute()) {
                 $inserted = true;
                 $success = "Resident account created successfully. Default password is their Resident Number (" . $resident_number . ").";
-                $resident_number = $first_name = $last_name = $gender = $email = $contact_number = $address = "";
-            } else {
-                break;
             }
-        }
 
-        if (!$inserted && $error === "") {
-            $error = "Unable to create account. Please try again.";
+            if (!$inserted && $error === "") {
+                $error = "Unable to create account. Please try again.";
+            }
+
+        });
+
+        if ($inserted) {
+            $resident_number = $first_name = $last_name = $gender = $email = $contact_number = $address = "";
         }
     }
 }

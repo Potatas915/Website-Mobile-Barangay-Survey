@@ -2,82 +2,119 @@
 require_once __DIR__ . "/../includes/functions.php";
 require_resident_login();
 
-$resident_id = $_SESSION["resident_id"];
+$resident_id = (string)$_SESSION["resident_id"];
 $survey_id = isset($_GET["survey_id"]) ? (int)$_GET["survey_id"] : 0;
 
-// prevent answering the same survey twice
-$check = $conn->prepare("SELECT response_id FROM responses WHERE survey_id = ? AND resident_id = ?");
-$check->bind_param("ii", $survey_id, $resident_id);
-$check->execute();
-if ($check->get_result()->num_rows > 0) {
-    redirect("dashboard.php");
-}
+$error = "";
 
-$survey_stmt = $conn->prepare("SELECT title, description FROM surveys WHERE survey_id = ? AND status = 'active'");
-$survey_stmt->bind_param("i", $survey_id);
-$survey_stmt->execute();
-$survey = $survey_stmt->get_result()->fetch_assoc();
-if (!$survey) {
-    redirect("dashboard.php");
-}
+fb_page(function () use ($resident_id, $survey_id, &$survey, &$questions, &$choices_by_question) {
 
-$questions_stmt = $conn->prepare("SELECT question_id, question_text, question_type, is_required FROM survey_questions WHERE survey_id = ? ORDER BY question_order");
-$questions_stmt->bind_param("i", $survey_id);
-$questions_stmt->execute();
-$questions = $questions_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    // prevent answering the same survey twice
+    // (the old UNIQUE KEY on responses(survey_id, resident_id))
+    foreach (fb_rows("responses") as $response) {
+        if ((string)($response["survey_id"] ?? "") === (string)$survey_id
+            && (string)($response["resident_id"] ?? "") === $resident_id) {
+            redirect("dashboard.php");
+        }
+    }
 
-$choices_by_question = [];
-$choices_stmt = $conn->prepare("SELECT choice_id, question_id, choice_text FROM survey_choices WHERE question_id = ? ORDER BY choice_order");
+    $survey = fb_get("surveys/" . $survey_id);
+    if (!is_array($survey) || ($survey["status"] ?? "") !== "active") {
+        redirect("dashboard.php");
+    }
 
-foreach ($questions as $q) {
-    $choices_stmt->bind_param("i", $q["question_id"]);
-    $choices_stmt->execute();
-    $choices_by_question[$q["question_id"]] = $choices_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-}
+    $questions = [];
+    $choices_by_question = [];
+
+    foreach (fb_rows("surveys/" . $survey_id . "/questions") as $qid => $question) {
+        $question["question_id"] = (string)$qid;
+
+        $choices = [];
+        foreach (fb_rows("surveys/" . $survey_id . "/questions/" . $qid . "/choices") as $cid => $choice) {
+            $choice["choice_id"] = (string)$cid;
+            $choices[] = $choice;
+        }
+        // The old query ended with ORDER BY choice_order.
+        usort($choices, function ($a, $b) {
+            return (int)$a["choice_order"] <=> (int)$b["choice_order"];
+        });
+
+        $questions[] = $question;
+        $choices_by_question[(string)$qid] = $choices;
+    }
+
+    // The old query ended with ORDER BY question_order.
+    usort($questions, function ($a, $b) {
+        return (int)$a["question_order"] <=> (int)$b["question_order"];
+    });
+
+});
 
 // handle submission
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-    $conn->begin_transaction();
     try {
-        $resident_name = $_SESSION["resident_name"];
-        $resp_stmt = $conn->prepare("INSERT INTO responses (survey_id, resident_id, resident_name) VALUES (?, ?, ?)");
-        $resp_stmt->bind_param("iis", $survey_id, $resident_id, $resident_name);
-        $resp_stmt->execute();
-        $response_id = $conn->insert_id;
-
-        $result_stmt = $conn->prepare("INSERT INTO survey_results (response_id, question_id, choice_id, answer_text) VALUES (?, ?, ?, ?)");
+        // Every answer is collected and checked before anything is written.
+        // Firebase has no transactions, so validating up front is what keeps
+        // a bad submission from leaving a half-filled response behind.
+        $answers = [];
 
         foreach ($questions as $q) {
             $qid = $q["question_id"];
             $field = "q_" . $qid;
 
             if ($q["question_type"] === "short_answer") {
-                $answer_text = isset($_POST[$field]) ? trim($_POST[$field]) : null;
-                if ($answer_text === "") $answer_text = null;
-                $choice_id = null;
-                $result_stmt->bind_param("iiis", $response_id, $qid, $choice_id, $answer_text);
-                $result_stmt->execute();
+                $answers[$qid] = array(
+                    "question_id" => $qid,
+                    "choice_id"   => "",
+                    "answer_text" => trim($_POST[$field] ?? ""),
+                );
             } else {
                 // multiple_choice, yes_no, rating all use a choice_id
-                if (isset($_POST[$field]) && $_POST[$field] !== "") {
-                    $choice_id = (int)$_POST[$field];
-                    $answer_text = null;
-                    $result_stmt->bind_param("iiis", $response_id, $qid, $choice_id, $answer_text);
-                    $result_stmt->execute();
-                } elseif ($q["is_required"] == 1) {
+                $posted = $_POST[$field] ?? "";
+
+                if ($posted !== "") {
+                    // Only accept a choice that really belongs to this
+                    // question; the form is not the only thing that can post.
+                    $valid = false;
+                    foreach ($choices_by_question[$qid] as $choice) {
+                        if ((string)$choice["choice_id"] === (string)$posted) {
+                            $valid = true;
+                            break;
+                        }
+                    }
+
+                    if (!$valid) {
+                        throw new Exception("Choice does not belong to this question.");
+                    }
+
+                    $answers[$qid] = array(
+                        "question_id" => $qid,
+                        "choice_id"   => (string)$posted,
+                        "answer_text" => "",
+                    );
+                } elseif ((int)$q["is_required"] === 1) {
                     throw new Exception("Missing required answer.");
                 }
             }
         }
 
-        $conn->commit();
+        fb_insert("responses", array(
+            "survey_id"     => (string)$survey_id,
+            "resident_id"   => $resident_id,
+            "resident_name" => $_SESSION["resident_name"],
+            "submitted_at"  => date("Y-m-d H:i:s"),
+            "answers"       => $answers,
+        ));
+
         redirect("confirmation.php");
-    } catch (Exception $e) {
-        $conn->rollback();
-        $error = "Please answer all required questions.";
+    } catch (Throwable $e) {
+        // Firebase/network problems are not the resident's fault, so keep the
+        // message for them specific instead of blaming the answers.
+        $error = $e instanceof FirebaseException
+            ? "The database could not be reached, so your answers were not saved. Please try again."
+            : "Please answer all required questions.";
     }
-}
-?>
+}?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
